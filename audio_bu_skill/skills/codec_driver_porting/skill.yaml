@@ -1,0 +1,27 @@
+manifest_version: "1.0"
+skill_id: "codec_driver_porting"
+version: "0.1.0"
+owner: "audio-bu-team"
+description: "Confirms whether a board's codec and AudioReach kernel drivers already exist upstream; if not, ports or writes the missing ASoC codec driver (manual or skill-assisted) before DT generation proceeds. Conditional skill — only fires when the upstream-driver-availability gate fails."
+dependencies: []
+mandatory_inputs:
+  - "workspace_context"
+  - "codec_part_numbers"
+  - "kernel_source_path"
+  - "run_id"
+optional_inputs:
+  - "vendor_downstream_driver_path"
+outputs:
+  - "codec_driver_availability"
+  - "evidence"
+confidence: 0.65
+validation_rules:
+  - "must_check_upstream_kernel_tree_before_porting"
+  - "must_evidence_each_codec_verdict"
+  - "must_flag_missing_drivers_before_dt_generation"
+execution_timeout: 3600
+sdlc_phase: "driver_understanding"
+status: "prototype"
+writes_knowledge: true
+requires_human_review: true
+evidence_required: true

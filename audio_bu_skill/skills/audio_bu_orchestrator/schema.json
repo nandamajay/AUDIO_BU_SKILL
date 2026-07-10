@@ -1,0 +1,62 @@
+{
+  "input_envelope": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": ["workspace_context", "target_soc", "nearest_target", "run_id"],
+    "properties": {
+      "workspace_context": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": {"type": "string", "minLength": 1}
+        }
+      },
+      "target_soc": {"type": "string", "minLength": 1},
+      "nearest_target": {"type": "string", "minLength": 1},
+      "run_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$"},
+      "gate_policy": {"type": "object"},
+      "resume_state": {"type": "string"}
+    }
+  },
+  "output_envelope": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": ["bringup_run_state", "evidence"],
+    "properties": {
+      "bringup_run_state": {
+        "type": "object",
+        "required": ["run_id", "bringup_state", "bringup_history", "skill_invocations"],
+        "properties": {
+          "run_id": {"type": "string", "minLength": 1},
+          "bringup_state": {
+            "type": "string",
+            "enum": ["INIT", "SCAFFOLD", "PATCH_APPLIED", "ON_TARGET", "VERIFY", "VERIFIED", "TRIAGE", "BLOCKED"]
+          },
+          "bringup_history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["from_state", "to_state", "transition", "reason", "timestamp"],
+              "properties": {
+                "from_state": {"type": "string"},
+                "to_state": {"type": "string"},
+                "transition": {"type": "string"},
+                "reason": {"type": "string", "minLength": 1},
+                "failed_gate": {"type": ["string", "null"]},
+                "timestamp": {"type": "string"}
+              }
+            }
+          },
+          "skill_invocations": {"type": "object"}
+        }
+      },
+      "evidence": {
+        "type": "object",
+        "required": ["evidence_refs"],
+        "properties": {
+          "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

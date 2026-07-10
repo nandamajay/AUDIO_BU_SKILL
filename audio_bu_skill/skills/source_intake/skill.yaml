@@ -1,0 +1,29 @@
+manifest_version: "1.0"
+skill_id: "source_intake"
+version: "0.1.0"
+owner: "audio-bu-team"
+description: "Interactively resolves where bring-up evidence comes from (live IPCAT query vs. offline schematic/IO-map documents), captures the SCMI-vs-rpmhpd power model source, and asks clarifying questions on ambiguous inputs before handing resolved evidence back to the orchestrator."
+dependencies: []
+mandatory_inputs:
+  - "workspace_context"
+  - "target_soc"
+  - "run_id"
+optional_inputs:
+  - "ipcat_export_path"
+  - "schematic_path"
+  - "io_mapping_path"
+  - "downstream_reference_path"
+outputs:
+  - "resolved_evidence_sources"
+  - "evidence"
+confidence: 0.7
+validation_rules:
+  - "must_resolve_ipcat_vs_offline_choice"
+  - "must_capture_power_model_source"
+  - "must_flag_unresolved_ambiguities_for_human_review"
+execution_timeout: 900
+sdlc_phase: "requirements"
+status: "prototype"
+writes_knowledge: true
+requires_human_review: true
+evidence_required: true

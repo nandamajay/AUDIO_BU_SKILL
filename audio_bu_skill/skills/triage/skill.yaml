@@ -1,0 +1,27 @@
+manifest_version: "1.0"
+skill_id: "triage"
+version: "0.1.0"
+owner: "audio-bu-team"
+description: "Root-causes a failed bring-up gate (compile, probe-prerequisite, ADSP boot/PAS, audio-path/DAI, or binding review) from the gate's evidence and error output, and proposes a fix that feeds back into DT/defconfig regeneration via the orchestrator's loopback rail."
+dependencies: []
+mandatory_inputs:
+  - "workspace_context"
+  - "failed_gate"
+  - "gate_evidence"
+  - "run_id"
+optional_inputs:
+  - "previous_triage_attempts"
+outputs:
+  - "triage_diagnosis"
+  - "evidence"
+confidence: 0.55
+validation_rules:
+  - "must_cite_evidence_for_diagnosis"
+  - "must_classify_failure_category"
+  - "must_mark_unresolved_if_no_root_cause_found"
+execution_timeout: 1800
+sdlc_phase: "debug"
+status: "prototype"
+writes_knowledge: true
+requires_human_review: true
+evidence_required: true

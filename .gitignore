@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime state/logs/artifacts
+state/
+logs/
+artifacts/
+audio_bu_skill/state/
+*.log
+*.jsonl
+
+# Evidence / confidential collateral
+audio_bu_skill/targets/*/evidence/ipcat/*
+audio_bu_skill/targets/*/evidence/offline/*
+audio_bu_skill/targets/*/evidence/**/provenance.json
+Documents/
+IPCAT/
+*.pdf
+*.xlsx
+*.xls
+*.docx
+*.pptx
+*.pptm
+*.html
+*.gz
+*.zip
+*.tar
+*.tgz
+
+# Confidential findings / evidence notes (schematic- and IPCAT-derived)
+AUDIO_SCHEMATIC_FINDINGS.md
+AUDIO_EVIDENCE_TABLE.md
+
+# Kernel/build outputs
+linux-nord/
+linux*/
+build/
+out/
+tmp/
+tmp-glibc/
+sstate-cache/
+downloads/
+
+# Local/editor
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+.DS_Store
+
+# Secrets
+.env
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Keep empty evidence folders (negate the evidence ignores above)
+!audio_bu_skill/targets/*/evidence/ipcat/.gitkeep
+!audio_bu_skill/targets/*/evidence/offline/.gitkeep

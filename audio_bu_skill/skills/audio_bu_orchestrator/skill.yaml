@@ -1,0 +1,29 @@
+manifest_version: "1.0"
+skill_id: "audio_bu_orchestrator"
+version: "0.1.0"
+owner: "audio-bu-team"
+description: "Drives the Q6/AudioReach audio bring-up state machine end-to-end (skill-fit gate, source gathering, DT scaffold, compile/probe/boot/audio-path/review gates), invoking source_intake, triage, and codec_driver_porting on demand and recording every state transition as evidence."
+dependencies: []
+mandatory_inputs:
+  - "workspace_context"
+  - "target_soc"
+  - "nearest_target"
+  - "run_id"
+optional_inputs:
+  - "gate_policy"
+  - "resume_state"
+outputs:
+  - "bringup_run_state"
+  - "evidence"
+confidence: 0.6
+validation_rules:
+  - "must_enforce_skill_fit_gate_before_scaffold"
+  - "must_record_state_transition_evidence"
+  - "must_not_skip_gates_without_evidence"
+  - "must_halt_in_blocked_state_pending_external_input"
+execution_timeout: 14400
+sdlc_phase: "planning"
+status: "prototype"
+writes_knowledge: true
+requires_human_review: true
+evidence_required: true

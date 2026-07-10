@@ -1,0 +1,65 @@
+{
+  "input_envelope": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": ["workspace_context", "codec_part_numbers", "kernel_source_path", "run_id"],
+    "properties": {
+      "workspace_context": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": {"type": "string", "minLength": 1}
+        }
+      },
+      "codec_part_numbers": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+      "kernel_source_path": {"type": "string", "minLength": 1},
+      "run_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$"},
+      "vendor_downstream_driver_path": {"type": "string"},
+      "verdicts": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "required": ["driver_path", "status"],
+          "properties": {
+            "driver_path": {"type": "string", "minLength": 1},
+            "status": {"type": "string", "enum": ["upstream_present", "needs_port", "needs_write"]}
+          }
+        }
+      }
+    }
+  },
+  "output_envelope": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": ["codec_driver_availability", "evidence"],
+    "properties": {
+      "codec_driver_availability": {
+        "type": "object",
+        "required": ["run_id", "per_codec", "blocks_dt_generation"],
+        "properties": {
+          "run_id": {"type": "string", "minLength": 1},
+          "per_codec": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["status", "driver_path"],
+              "properties": {
+                "status": {"type": "string", "enum": ["upstream_present", "needs_port", "needs_write", "unresolved"]},
+                "driver_path": {"type": ["string", "null"]},
+                "exists_on_disk": {"type": "boolean"}
+              }
+            }
+          },
+          "blocks_dt_generation": {"type": "boolean"}
+        }
+      },
+      "evidence": {
+        "type": "object",
+        "required": ["evidence_refs"],
+        "properties": {
+          "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

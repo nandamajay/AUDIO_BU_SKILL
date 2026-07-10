@@ -1,0 +1,61 @@
+{
+  "input_envelope": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": ["workspace_context", "failed_gate", "gate_evidence", "run_id"],
+    "properties": {
+      "workspace_context": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": {"type": "string", "minLength": 1}
+        }
+      },
+      "failed_gate": {"type": "string", "enum": ["dt_generation", "compile", "boot_pas", "audio_path", "binding_review"]},
+      "gate_evidence": {},
+      "run_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$"},
+      "previous_triage_attempts": {"type": "array"},
+      "diagnosis": {
+        "type": "object",
+        "properties": {
+          "root_cause": {"type": "string"},
+          "cited_evidence": {"type": "array", "items": {"type": "string"}},
+          "proposed_fix": {"type": "string"},
+          "failure_category": {"type": "string", "enum": ["dt_generation", "compile", "boot_pas", "audio_path", "binding_review"]},
+          "needs_external_input": {"type": ["string", "null"]}
+        }
+      }
+    }
+  },
+  "output_envelope": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": ["triage_diagnosis", "evidence", "unresolved"],
+    "properties": {
+      "triage_diagnosis": {
+        "type": "object",
+        "required": ["run_id", "failed_gate", "unresolved", "blocked_on_external_input"],
+        "properties": {
+          "run_id": {"type": "string", "minLength": 1},
+          "failed_gate": {"type": "string"},
+          "failure_category": {"type": ["string", "null"]},
+          "root_cause": {"type": ["string", "null"]},
+          "proposed_fix": {"type": ["string", "null"]},
+          "unresolved": {"type": "boolean"},
+          "blocked_on_external_input": {"type": "boolean"},
+          "needs_external_input": {"type": ["string", "null"]},
+          "gate_evidence_summary": {"type": "string"}
+        }
+      },
+      "evidence": {
+        "type": "object",
+        "required": ["evidence_refs"],
+        "properties": {
+          "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "unresolved": {"type": "boolean"},
+      "blocked_on_external_input": {"type": "boolean"}
+    }
+  }
+}

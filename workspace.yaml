@@ -1,0 +1,46 @@
+manifest_version: "1.0"
+workspace_id: "nord-iq10-audio-bringup"
+metadata:
+  board: "SA8797P Nord IQ-10 EVK"
+  profile: "audio-bringup-q6-audioreach"
+artifacts:
+  - id: "schematic_ld20_94441"
+    type: "input.pdf.schematic"
+    path: "Documents/LD20-94441-0010_17_02_2026 1.pdf"
+    required: false
+  - id: "schematic_ld20_94440"
+    type: "input.pdf.schematic"
+    path: "Documents/LD20-94440-0010_17_02_2026 1.pdf"
+    required: false
+  - id: "io_mapping_xlsx"
+    type: "input.xlsx.io_mapping"
+    path: "Documents/IQ10_RRD_IO_Mapping.xlsx"
+    required: false
+  - id: "sysio_review_pptm"
+    type: "input.pptm.io_review"
+    path: "Documents/IQ10_Reference_Design_SYSIO_Review_v4.pptm"
+    required: false
+  - id: "ipcat_arm_address_file"
+    type: "input.json.ipcat"
+    path: "Documents/IPCAT/ARM_ADDRESS_FILE_SW_with_CC.JSON.gz"
+    required: false
+  - id: "ipcat_buses"
+    type: "input.xlsx.ipcat"
+    path: "Documents/IPCAT/IP Catalog - SA8797P (NordAU) v2 - Buses.xlsx"
+    required: false
+  - id: "ipcat_gpios"
+    type: "input.xlsx.ipcat"
+    path: "Documents/IPCAT/SA8797P (NordAU) v2 GPIOs.xlsx"
+    required: false
+  - id: "evidence_table"
+    type: "knowledge.markdown.evidence_table"
+    path: "AUDIO_EVIDENCE_TABLE.md"
+    required: true
+  - id: "schematic_findings"
+    type: "knowledge.markdown.findings"
+    path: "AUDIO_SCHEMATIC_FINDINGS.md"
+    required: true
+  - id: "linux_nord_tree_head"
+    type: "knowledge.git.kernel_tree_head"
+    path: "linux-nord/.git/HEAD"
+    required: true
