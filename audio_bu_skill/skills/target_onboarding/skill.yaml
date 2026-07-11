@@ -1,0 +1,31 @@
+manifest_version: "1.0"
+skill_id: "target_onboarding"
+version: "0.1.0"
+owner: "audio-bu-team"
+description: "Onboards a new audio bring-up target: extracts a feature profile from the kernel tree + evidence, ranks the nearest existing targets by weighted similarity with cited evidence, and proposes a case.generated.py (nearest_target, run_id, codec list, evidence_roots, kernel_source_path) with uncertain fields flagged NEEDS_REVIEW. Read-only: never generates kernel code, never compiles, never overwrites case.py."
+dependencies: []
+mandatory_inputs:
+  - "workspace_context"
+  - "target_name"
+  - "kernel_source_path"
+  - "run_id"
+optional_inputs:
+  - "evidence_roots"
+  - "target_db_root"
+outputs:
+  - "target_profile"
+  - "generated_case"
+  - "similarity_report"
+  - "evidence_inventory"
+  - "evidence"
+confidence: 0.6
+validation_rules:
+  - "must_rank_at_least_one_candidate"
+  - "must_flag_low_confidence_for_human_review"
+  - "must_not_finalize_uncertain_fields"
+execution_timeout: 900
+sdlc_phase: "requirements"
+status: "prototype"
+writes_knowledge: true
+requires_human_review: true
+evidence_required: true

@@ -87,7 +87,69 @@ and lands in `BLOCKED` (see "What BLOCKED means" below). A target with no
 compile/DT blocker and passing boot/audio outcomes instead runs all the way to
 `VERIFIED`.
 
-## How to add a new target
+## How to onboard a new target (v1.1 Phase 1 — recommended first step)
+
+Instead of hand-writing `case.py` from scratch, let onboarding detect the nearest
+existing target and draft a `case.generated.py` for you to review. This is
+**read-only**: it never generates kernel code, never compiles, and never writes
+`case.py`.
+
+1. Create the target's evidence folders and drop in schematics / datasheets /
+   IPCAT exports (the more evidence, the better the codec + SoC detection):
+   ```
+   mkdir -p audio_bu_skill/targets/<name>/evidence/{ipcat,offline}
+   # drop datasheets/schematics into evidence/offline/ (filenames carrying the
+   # codec part number, e.g. PCM1681_datasheet.pdf, improve codec detection)
+   ```
+   (`--onboard` also creates these folders if missing.)
+
+2. Run onboarding against the kernel tree:
+   ```
+   cd /local/mnt/workspace/NORD_BU
+   PYTHONPATH=audio_bu_skill python3 -m orchestrator.main \
+     --onboard <name> --kernel-source linux-nord
+   ```
+   `--kernel-source` is **required** here (no `case.py` exists yet to supply
+   `kernel_source_path`). It writes five artifacts into `targets/<name>/`:
+   `case.generated.py`, `onboarding_report.md`, `similarity_report.json`,
+   `evidence_inventory.json`, `profile.json`.
+
+3. Review the proposal:
+   - `onboarding_report.md` — the ranked nearest-target table (per-signal scores +
+     cited evidence), the derived-fields table, and the `NEEDS_REVIEW` list.
+   - `similarity_report.json` — machine-readable scores + confidence + weights.
+   - A **low-confidence** match (score < 0.75 or margin < 0.10) leaves
+     `nearest_target`/`inherit_from` un-finalized and flags human review — decide
+     the nearest target yourself in that case.
+
+4. Fill in / confirm every `# NEEDS_REVIEW` field in `case.generated.py`. In
+   particular the **power model** (`power_model_source`) is never auto-finalized —
+   confirm rpmhpd vs. SCMI with the Power team — and the **codec list** may need a
+   port/write judgment the tool won't make.
+
+5. Promote (a deliberate manual rename — this is the human gate):
+   ```
+   mv audio_bu_skill/targets/<name>/case.generated.py \
+      audio_bu_skill/targets/<name>/case.py
+   ```
+
+6. Run the normal v1.0 flow:
+   ```
+   PYTHONPATH=audio_bu_skill python3 -m orchestrator.main --target <name>
+   ```
+
+> **Evidence gate:** onboarding requires at least one piece of cited evidence
+> (an evidence file or a kernel file a signal was derived from). A brand-new target
+> with an empty evidence folder and no matching `.dtsi` yet will fail the
+> `evidence_required` gate — drop in a datasheet/schematic first. This is enforcement,
+> not a bug.
+
+> **`--rerun` drift note:** adding the `target_onboarding` skill changes the skill
+> registry that `--rerun` fingerprints, so a Nord manifest recorded before this
+> framework version will show `DRIFT DETECTED` on the new skill files until a normal
+> `--target nord-iq10` run refreshes it. Expected, documented, self-healing.
+
+## How to add a new target (manual authoring)
 
 1. `mkdir -p audio_bu_skill/targets/<name>/evidence/{ipcat,offline}` and drop the
    IPCAT exports / schematics / datasheets into the matching subfolder.

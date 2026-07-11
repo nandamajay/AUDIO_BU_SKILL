@@ -1,0 +1,104 @@
+{
+  "input_envelope": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": ["workspace_context", "target_name", "kernel_source_path", "run_id"],
+    "properties": {
+      "workspace_context": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": {"type": "string", "minLength": 1}
+        }
+      },
+      "target_name": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$"},
+      "kernel_source_path": {"type": "string", "minLength": 1},
+      "run_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.-]+$"},
+      "evidence_roots": {
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+        "properties": {
+          "ipcat": {"type": "string"},
+          "offline_documents": {"type": "string"}
+        }
+      },
+      "target_db_root": {"type": "string", "minLength": 1}
+    }
+  },
+  "output_envelope": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": ["target_profile", "generated_case", "similarity_report", "evidence_inventory", "evidence"],
+    "properties": {
+      "target_profile": {
+        "type": "object",
+        "required": ["target_name"],
+        "properties": {
+          "target_name": {"type": "string", "minLength": 1},
+          "soc": {"type": "string"},
+          "codecs": {"type": "array", "items": {"type": "string"}},
+          "dt_compatibles": {"type": "array", "items": {"type": "string"}},
+          "power_domain_providers": {"type": "array", "items": {"type": "string"}},
+          "audioreach": {"type": ["boolean", "null"]},
+          "soundwire": {"type": "object"},
+          "cites": {"type": "object"}
+        }
+      },
+      "generated_case": {
+        "type": "object",
+        "required": ["target_soc", "nearest_target", "run_id", "needs_review"],
+        "properties": {
+          "target_soc": {"type": "string"},
+          "nearest_target": {"type": "string"},
+          "run_id": {"type": "string", "minLength": 1},
+          "inherit_from": {"type": "string"},
+          "evidence_source": {"type": "string", "enum": ["ipcat", "offline_documents", "both", "ipcat_first"]},
+          "evidence_roots": {"type": "object", "additionalProperties": {"type": "string"}},
+          "kernel_source_path": {"type": "string"},
+          "power_model_source": {"type": "string"},
+          "codec_part_numbers": {"type": "array", "items": {"type": "string"}},
+          "codec_verdicts": {"type": "object"},
+          "needs_review": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "similarity_report": {
+        "type": "object",
+        "required": ["ranked", "confidence", "weights"],
+        "properties": {
+          "ranked": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["target_name", "overall", "per_signal"],
+              "properties": {
+                "target_name": {"type": "string"},
+                "overall": {"type": "number"},
+                "per_signal": {"type": "object"},
+                "cites": {"type": "object"}
+              }
+            }
+          },
+          "confidence": {"type": "object"},
+          "weights": {"type": "object"}
+        }
+      },
+      "evidence_inventory": {
+        "type": "object",
+        "required": ["files"],
+        "properties": {
+          "files": {"type": "array", "items": {"type": "string"}},
+          "evidence_roots": {"type": "object"},
+          "kernel_source_path": {"type": "string"}
+        }
+      },
+      "evidence": {
+        "type": "object",
+        "required": ["evidence_refs"],
+        "properties": {
+          "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "human_review_needed": {"type": "boolean"}
+    }
+  }
+}

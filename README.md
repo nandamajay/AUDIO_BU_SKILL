@@ -73,6 +73,8 @@ with **skill packages** enforcing the contract at each phase.
 - **dt_scaffolding** *(roadmap — see below)* — device-tree generation/patch authoring.
 - **triage** — diagnoses a compile/DT blocker and classifies it (owner, category,
   expected unblock signal).
+- **target_onboarding** *(v1.1 Phase 1)* — detects the nearest existing target and proposes a
+  `case.generated.py` for a new target; read-only, human-gated (see §14).
 
 **Outputs** (`artifacts/<run_id>/`)
 - `manifest.json`, `state.json`, `evidence_refs.json`, `skill_outputs.json`,
@@ -120,11 +122,13 @@ AUDIO_BU_SKILL/                      <- repository root (workspace root)
     │   ├── loader_skill_manifest.py <- reads/validates the skill registry
     │   ├── schema_validation.py     <- shared JSON-Schema helpers
     │   ├── workspace_loader.py      <- reads workspace.yaml
+    │   ├── similarity/              <- (v1.1) nearest-target detection: features + weighted scoring
     │   └── runners/                 <- plain-function skill runners
     ├── skills/                      <- one dir per skill: skill.yaml + schema.json + validator.py
     │   ├── audio_bu_orchestrator/
     │   ├── source_intake/
     │   ├── codec_driver_porting/
+    │   ├── target_onboarding/       <- (v1.1 Phase 1) nearest-target + proposed case.generated.py
     │   └── triage/
     ├── targets/                     <- one dir per bring-up target (per-target content)
     │   └── nord-iq10/
@@ -260,18 +264,90 @@ parent files are never mutated):
 
 The resolved case is what validation checks and what the run uses.
 
-## 14. Roadmap
+## 14. Target Onboarding (v1.1 Phase 1)
 
-Manual `case.py` authoring is supported today, but the intended next step is to reduce this
-manual work through target onboarding automation.
+Hand-authoring `targets/<name>/case.py` — nearest_target, run_id, codec list,
+evidence_roots, kernel_source_path — is the most painful, error-prone step of
+adding a target. **Target onboarding removes the blank page.** Given a target
+name, a kernel tree, and evidence folders, the framework auto-detects the nearest
+existing target, extracts a feature profile with cited evidence, and writes a
+*proposed* `case.generated.py` for a human to review and promote.
 
-**v1.1 / future:**
-- Target onboarding skill
-- Auto-generate `targets/<name>/case.py`
-- Auto-identify nearest target from schematics, IPCAT, codec data, and kernel tree
-- Similarity scoring across existing targets
-- Auto-populate codec list and driver readiness
-- Auto-populate evidence roots and `run_id`
+```
+PYTHONPATH=audio_bu_skill python3 -m orchestrator.main \
+  --onboard <new-target> \
+  --kernel-source linux-nord
+```
+
+`--onboard` is a fourth, standalone CLI mode alongside `--target`/`--replay`/`--rerun`.
+It is **read-only** and **additive**: it never enters the bring-up walk, never drives
+a `BringupState` transition past INIT, never generates kernel code, never compiles, and
+**never writes `case.py`**.
+
+**What it does:**
+1. **Extracts a feature profile** of the new target from the kernel tree + evidence:
+   codecs (grepped from evidence filenames + confirmed against `sound/soc/codecs/`),
+   audio DT `compatible` strings, power-domain providers (`rpmhpd` vs. `scmiN_pd` — the
+   Nord blocker axis), AudioReach / SoundWire signatures, and SoC identity. Each signal
+   records the file(s) it came from, for evidence citation.
+2. **Ranks the nearest existing targets** by weighted per-signal similarity
+   (codecs 0.30, power-domains 0.20, DT 0.20, AudioReach 0.15, SoundWire 0.10, SoC 0.05),
+   with a confidence score and margin. Below `MIN_SCORE`/`MIN_MARGIN` the match is flagged
+   **low-confidence** and `nearest_target`/`inherit_from` are *not* auto-finalized.
+3. **Proposes a `case.generated.py`** deriving `run_id`, `target_soc`, `nearest_target`,
+   `inherit_from`, `evidence_roots`, `kernel_source_path`, `codec_part_numbers`/`verdicts`,
+   and `evidence_source=ipcat_first`. Every uncertain field is marked `# NEEDS_REVIEW`.
+
+**Outputs** (written to `targets/<new-target>/`):
+`case.generated.py`, `onboarding_report.md`, `similarity_report.json`,
+`evidence_inventory.json`, `profile.json`.
+
+**Human review gate.** The onboarding skill sets `requires_human_review: true`, so the
+skill invocation stops at SUCCESS (proposed, not approved). Promotion is a deliberate,
+manual rename by the engineer:
+
+```
+# review the report + generated case, then:
+mv targets/<new-target>/case.generated.py targets/<new-target>/case.py
+# then run the normal v1.0 flow:
+PYTHONPATH=audio_bu_skill python3 -m orchestrator.main --target <new-target>
+```
+
+**What stays manual (by design):** promoting `case.generated.py` → `case.py`; confirming
+the **power model** (rpmhpd vs. SCMI is never auto-finalized); and finalizing the codec
+list/verdicts (a detected driver is proposed `upstream_present`; port/write judgments are
+the engineer's).
+
+**One expected side-effect:** adding the `target_onboarding` skill grows the skill
+registry, which `--rerun` fingerprints. A Nord manifest recorded *before* this framework
+gained the skill will show `DRIFT DETECTED` on the new skill's files until a normal
+`--target nord-iq10` run refreshes the manifest — correct drift-detection behavior, not a
+regression.
+
+**Deferred to Phase 2/3 (NOT implemented):** device-tree scaffolding, codec / machine-driver
+/ AudioReach code generation, patch generation, compile validation + repair loop, commit
+generation, and any pluggable code-generation engine. Onboarding proposes *metadata* only;
+it authors no kernel code.
+
+## 16. Roadmap
+
+Target onboarding + nearest-target detection (**v1.1 Phase 1**) is implemented — see §14.
+It removes the most painful manual work (authoring `nearest_target` and the initial
+`case.py`) while staying low-risk: read-only, additive, human-gated, no code generation.
+
+**v1.1 Phase 1 — done:**
+- ✅ Target onboarding skill (`target_onboarding`)
+- ✅ Nearest-target detection via a weighted similarity engine over existing targets
+- ✅ Auto-propose `case.generated.py` (nearest_target, run_id, codec list, evidence_roots,
+  kernel_source_path) with uncertain fields flagged `NEEDS_REVIEW`
+- ✅ Human review gate + manual promotion to `case.py`
+
+**Phase 2/3 — planned (not started):**
+- Device-tree scaffolding / codec / machine-driver / AudioReach code generation
+- Patch generation (proposed diffs behind a human gate)
+- Compile validation + bounded repair loop
+- Commit generation + generation-side reproducibility
+- Pluggable code-generation engine
 - Fleet-level analytics dashboard
 - More audio validation skills:
   - SoundWire enablement
@@ -279,9 +355,8 @@ manual work through target onboarding automation.
   - DSP image validation
   - Speaker protection validation
   - SSR validation
-  - Device-tree generation / patch generation
 
-## 15. Confidentiality Notice
+## 17. Confidentiality Notice
 
 Do not commit IPCAT exports, schematics, board collateral, generated run artifacts, state
 files, logs, kernel trees, or internal documents. These are excluded via `.gitignore` and
