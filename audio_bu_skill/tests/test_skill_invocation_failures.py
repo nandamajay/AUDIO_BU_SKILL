@@ -105,10 +105,46 @@ def test_normal_success() -> None:
     print("PASS: normal success returns + captures output")
 
 
+def test_resume_from_running_self_heals() -> None:
+    """A run whose persisted skill_state is stuck at RUNNING (process killed
+    mid-invocation) must self-heal via RUNNING->FAILED->RETRY->READY and
+    continue, not raise StateMachineError(ILLEGAL_TRANSITION)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        o = _fresh_orchestrator(Path(tmp), "interrupted-run")
+        o.register_runner("source_intake", lambda env: _good_output())
+
+        # Simulate a Ctrl-C mid-run: manually replay the PENDING->READY->RUNNING
+        # steps invoke_skill's own machinery would have taken, then stop there
+        # (as a kill signal would have) before the runner call completes.
+        from orchestrator import run_store
+        for from_state, to_state in (("PENDING", "READY"), ("READY", "RUNNING")):
+            run_store.save_skill_transition(
+                o.workspace_root, o.run_id, "source_intake",
+                {"skill_id": "source_intake", "run_id": o.run_id, "from_state": from_state,
+                 "to_state": to_state, "transition": f"{from_state}->{to_state}",
+                 "reason": "invoking runner", "failure": None,
+                 "requires_validated_output": False, "requires_persisted_artifacts": False,
+                 "timestamp": "2026-01-01T00:00:00Z"},
+            )
+
+        out = o.invoke_skill("source_intake", _good_input(Path(tmp)))
+        assert out["resolved_evidence_sources"]["evidence_source"] == "offline_documents"
+
+        record = run_store.load_run(o.workspace_root, o.run_id)
+        history = record["skill_invocations"]["source_intake"]["history"]
+        transitions = [h["transition"] for h in history]
+        assert "RUNNING->FAILED" in transitions, transitions
+        assert "FAILED->RETRY" in transitions, transitions
+        assert any(h["transition"] == "RUNNING->FAILED" and h["failure"]["code"] == "INTERRUPTED_RESUME"
+                   for h in history), history
+    print("PASS: resumed RUNNING self-heals via RUNNING->FAILED->RETRY->READY, then succeeds")
+
+
 def main() -> None:
     test_input_invalid_not_masked()
     test_output_invalid_still_raises()
     test_normal_success()
+    test_resume_from_running_self_heals()
     print("ALL TESTS PASSED")
 
 

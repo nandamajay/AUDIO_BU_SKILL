@@ -132,6 +132,25 @@ class BringupOrchestrator:
                       message=f"{transition.transition}: {reason}")
             state = to_state
 
+        if state in ("RUNNING", "VALIDATING"):
+            # invoke_skill() always starts by stepping to READY, but only
+            # PENDING->READY and RETRY->READY are legal transitions. A process
+            # killed/interrupted while this skill was RUNNING or VALIDATING
+            # leaves the persisted skill_state stuck there with no legal path
+            # forward on resume. Self-heal via the state machine's own approved
+            # ...->FAILED->RETRY->READY chain (no FSM changes) so the
+            # interruption is recorded in history, not silently erased or
+            # permanently stranding the run.
+            step(
+                "FAILED", f"resumed run found skill_state={state}; prior attempt was interrupted",
+                metadata={"failure": {
+                    "code": "INTERRUPTED_RESUME",
+                    "message": f"prior attempt left skill_state={state}; process likely killed/interrupted mid-run",
+                }},
+            )
+            step("RETRY", "retrying after interrupted-resume self-heal",
+                 metadata={"retry": {"reason": "resumed after interruption"}})
+
         step("READY", "mandatory inputs satisfied")
 
         validator = self._validators.get(skill_id)
