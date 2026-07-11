@@ -63,6 +63,16 @@ class BringupCase:
     codec_verdicts: dict[str, Any] = field(default_factory=dict)
     patch_reason: str = "DT scaffolding landed and builds clean"
 
+    # audio_topology (optional; populated by target_onboarding's QGenie analysis
+    # via the Onboarding Accuracy Upgrade collectors). Preserves the richer
+    # topology (amplifiers, speakers, mics, SoundWire, LPASS/ADSP/AudioReach/
+    # GPR/APM, graded power-model status, candidate FROMLIST patch series, pin
+    # cross-check verdicts) that codec_part_numbers/codec_verdicts alone cannot
+    # express. Additive and optional: defaults to {} so every existing target
+    # (e.g. nord-iq10) that never sets it is unaffected; merge_cases's generic
+    # dict-field merge already handles it key-wise like codec_verdicts.
+    audio_topology: dict[str, Any] = field(default_factory=dict)
+
     # PATCH_APPLIED -> ON_TARGET when there is no compile/DT blocker
     compile_reason: str = "compiles clean, flashed to target"
 

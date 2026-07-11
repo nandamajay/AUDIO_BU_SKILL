@@ -651,9 +651,109 @@ def _render_case_generated(gc: dict) -> str:
     lines.append(field_line("power_model_source", gc.get("power_model_source", "")))
     lines.append(field_line("codec_part_numbers", gc.get("codec_part_numbers", [])))
     lines.append(field_line("codec_verdicts", gc.get("codec_verdicts", {})))
+    if gc.get("audio_topology"):
+        lines.append(field_line("audio_topology", gc["audio_topology"]))
     lines.append(")")
     lines.append("")
     return "\n".join(lines)
+
+
+def _render_kernel_history_section(gc: dict) -> list[str]:
+    """Onboarding Accuracy Upgrade slice 7: surface kernel_history's FROMLIST/RFC
+    candidates (already in generated_case["candidate_patch_series"] since slice 6)
+    in the human-readable report. Additive — omitted entirely when absent, so a
+    pre-slice-6 generated_case renders exactly as before."""
+    candidates = gc.get("candidate_patch_series") or []
+    if not candidates:
+        return []
+    lines = [
+        "",
+        "## Kernel History / FROMLIST Findings",
+        "",
+        "Candidate commits found via read-only kernel git archaeology "
+        "(`git log`/`show`/`merge-base` only — never applied or checked out):",
+        "",
+    ]
+    for c in candidates:
+        applied = c.get("applied")
+        applied_str = "applied (already an ancestor of HEAD)" if applied is True else \
+            "unapplied" if applied is False else "unknown"
+        files_changed = c.get("files_changed") or []
+        shown_files = ", ".join(f"`{f}`" for f in files_changed[:5])
+        if len(files_changed) > 5:
+            shown_files += f", … (+{len(files_changed) - 5} more)"
+        lines.append(f"### `{(c.get('sha') or '')[:12]}` — {c.get('subject', '(no subject)')}")
+        lines.append("")
+        lines.append(f"- status               : {applied_str}")
+        if c.get("donor_hint"):
+            lines.append(f"- donor hint            : {c['donor_hint']}")
+        compat = c.get("compatible_fallbacks") or []
+        if compat:
+            lines.append(f"- compatible fallbacks  : {', '.join(f'`{x}`' for x in compat)}")
+        lines.append(f"- files changed         : {shown_files or '(none recorded)'}")
+        lines.append("")
+    return lines
+
+
+def _render_power_model_inspection_section(gc: dict) -> list[str]:
+    """Slice 7: surface power_model_hint (rpmhpd.c LCX/LMX inspection, folded into
+    generated_case["audio_topology"]["power_model"]["inspection_hint"] since slice
+    6) in the report. Additive — omitted when audio_topology/inspection_hint absent."""
+    hint = ((gc.get("audio_topology") or {}).get("power_model") or {}).get("inspection_hint")
+    if not hint:
+        return []
+    lines = [
+        "",
+        "## Power Model Inspection",
+        "",
+        "Best-effort `rpmhpd.c` LCX/LMX inspection (read-only; corroborating "
+        "evidence only — never auto-finalizes `power_model_source`):",
+        "",
+        f"- status        : `{hint.get('status')}`",
+        f"- kind          : `{hint.get('kind')}`",
+        f"- LCX present   : {hint.get('lcx_present')}",
+        f"- LMX present   : {hint.get('lmx_present')}",
+        f"- LCX+LMX both  : {hint.get('lcx_lmx_present')}",
+    ]
+    citations = hint.get("citations") or []
+    if citations:
+        lines.append(f"- citations     : {', '.join(f'`{c}`' for c in citations)}")
+    lines.append(
+        "- needs human review: **yes — power model is never auto-finalized; "
+        "confirm rpmhpd vs. SCMI with the Power team**"
+    )
+    lines.append("")
+    return lines
+
+
+def _render_pin_crosscheck_section(gc: dict) -> list[str]:
+    """Slice 7: surface pin_crosscheck verdicts (folded into generated_case
+    ["audio_topology"]["pin_crosschecks"] since slice 6) in the report. Additive —
+    omitted when no schematic nets were cross-checked."""
+    verdicts = (gc.get("audio_topology") or {}).get("pin_crosschecks") or []
+    if not verdicts:
+        return []
+    lines = [
+        "",
+        "## Pin Cross-Check",
+        "",
+        "Schematic-derived GPIO/net findings cross-checked against candidate patches' "
+        "DT GPIO assignments. A mismatch is a NEEDS_REVIEW signal, never a hard failure:",
+        "",
+        "| signal | schematic GPIO | patch/DT GPIO | match | needs review |",
+        "|--------|----------------|---------------|-------|--------------|",
+    ]
+    for v in verdicts:
+        match = v.get("match")
+        match_str = "✅ match" if match is True else "❌ mismatch" if match is False else "⚠️ unresolved"
+        needs_review = "yes" if match is not True else "no"
+        patch_gpio = v.get("patch_gpio")
+        lines.append(
+            f"| {v.get('signal', '')} | {v.get('schematic_gpio')} | "
+            f"{patch_gpio if patch_gpio is not None else '—'} | {match_str} | {needs_review} |"
+        )
+    lines.append("")
+    return lines
 
 
 def _render_onboarding_report(output: dict) -> str:
@@ -730,6 +830,10 @@ def _render_onboarding_report(output: dict) -> str:
     ]
     for signal, files in sorted((profile.get("cites") or {}).items()):
         lines.append(f"- **{signal}**: {', '.join(f'`{f}`' for f in files)}")
+
+    lines += _render_kernel_history_section(gc)
+    lines += _render_power_model_inspection_section(gc)
+    lines += _render_pin_crosscheck_section(gc)
 
     lines += [
         "",

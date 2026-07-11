@@ -58,7 +58,22 @@
           "power_model_source": {"type": "string"},
           "codec_part_numbers": {"type": "array", "items": {"type": "string"}},
           "codec_verdicts": {"type": "object"},
-          "needs_review": {"type": "array", "items": {"type": "string"}}
+          "needs_review": {"type": "array", "items": {"type": "string"}},
+          "audio_topology": {"type": "object"},
+          "candidate_patch_series": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sha": {"type": "string"},
+                "subject": {"type": "string"},
+                "files_changed": {"type": "array", "items": {"type": "string"}},
+                "applied": {"type": ["boolean", "null"]},
+                "donor_hint": {"type": ["string", "null"]},
+                "compatible_fallbacks": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          }
         }
       },
       "similarity_report": {

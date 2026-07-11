@@ -22,7 +22,12 @@ from typing import Any
 
 # Bumped whenever the analysis contract changes shape; recorded in the reasoning
 # fingerprints so a schema change surfaces as drift on --rerun.
-ANALYSIS_SCHEMA_VERSION = "1.0.0"
+#
+# 1.1.0 (Onboarding Accuracy Upgrade, slice 5): additive only — adds optional
+# `schematic_nets` (for pin_crosscheck's GPIO-vs-net comparison) and optional
+# `q6apm`/`q6prm` booleans on `audio_stack`. Nothing required changed; a
+# 1.0.0-shaped response still validates.
+ANALYSIS_SCHEMA_VERSION = "1.1.0"
 
 # A finding that carries per-field confidence + citations. Reused for every
 # perception signal QGenie returns so the "cite everything" rule is uniform.
@@ -46,6 +51,21 @@ _CODEC_ITEM: dict[str, Any] = {
         "citations": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["part", "confidence", "citations"],
+    "additionalProperties": True,
+}
+
+# New in 1.1.0: a schematic-derived GPIO/net finding, feeding pin_crosscheck.
+# Optional on the envelope (not in `required`) so a 1.0.0-style response with
+# no schematic_nets at all still validates.
+_SCHEMATIC_NET_ITEM: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "net_name": {"type": "string"},
+        "gpio": {"type": ["integer", "string"]},
+        "sheet_ref": {"type": "string"},
+        "citations": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["net_name", "gpio"],
     "additionalProperties": True,
 }
 
@@ -91,6 +111,8 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                 "audioreach": {"type": "boolean"},
                 "gpr": {"type": "boolean"},
                 "apm": {"type": "boolean"},
+                "q6apm": {"type": "boolean"},
+                "q6prm": {"type": "boolean"},
                 "citations": {"type": "array", "items": {"type": "string"}},
             },
             "additionalProperties": True,
@@ -111,6 +133,8 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
         "missing_evidence": {"type": "array", "items": {"type": "string"}},
         "overall_confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         "human_review_needed": {"type": "boolean"},
+        # New in 1.1.0, optional: schematic net/GPIO findings for pin_crosscheck.
+        "schematic_nets": {"type": "array", "items": _SCHEMATIC_NET_ITEM},
     },
     "required": [
         "soc",
