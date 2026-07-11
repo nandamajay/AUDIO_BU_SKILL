@@ -13,7 +13,6 @@ reproducibility fingerprints).
 from __future__ import annotations
 
 from orchestrator.reasoning.client import (
-    DEFAULT_IPCAT_MCP_CONFIG,
     QGenieReasoningClient,
     ReasoningClient,
     ReasoningUnavailableError,
@@ -33,7 +32,6 @@ __all__ = [
     "ReasoningUnavailableError",
     "get_reasoning_client",
     "build_prompt",
-    "DEFAULT_IPCAT_MCP_CONFIG",
     "ReasoningResult",
     "reasoning_fingerprints",
     "ANALYSIS_SCHEMA",

@@ -87,7 +87,7 @@ def test_doctor_nonzero_exit() -> None:
 
 
 def test_analysis_timeout() -> None:
-    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie", ipcat_mcp_config=None)
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
     client.cli_version, client.model_id, client._preflighted = "1.1.13", "2.1.198", True
     with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="qgenie", timeout=900)):
         try:
@@ -99,7 +99,7 @@ def test_analysis_timeout() -> None:
 
 
 def test_analysis_nonzero_exit() -> None:
-    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie", ipcat_mcp_config=None)
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
     client.cli_version, client.model_id, client._preflighted = "1.1.13", "2.1.198", True
     with mock.patch("subprocess.run", return_value=_proc(1, stderr="claude crashed")):
         try:
@@ -111,7 +111,7 @@ def test_analysis_nonzero_exit() -> None:
 
 
 def test_output_unparseable() -> None:
-    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie", ipcat_mcp_config=None)
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
     client.cli_version, client.model_id, client._preflighted = "1.1.13", "2.1.198", True
     with mock.patch("subprocess.run", return_value=_proc(0, stdout="not json at all")):
         try:
@@ -123,7 +123,7 @@ def test_output_unparseable() -> None:
 
 
 def test_output_schema_invalid() -> None:
-    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie", ipcat_mcp_config=None)
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
     client.cli_version, client.model_id, client._preflighted = "1.1.13", "2.1.198", True
     bad_analysis = {"soc": {"value": "X"}}  # missing required keys (codecs, power_model, ...)
     with mock.patch("subprocess.run", return_value=_proc(0, stdout=json.dumps(bad_analysis))):
@@ -136,7 +136,7 @@ def test_output_schema_invalid() -> None:
 
 
 def test_mocked_success_direct_object() -> None:
-    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie", ipcat_mcp_config=None)
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
     client.cli_version, client.model_id, client._preflighted = "1.1.13", "2.1.198", True
     with mock.patch("subprocess.run", return_value=_proc(0, stdout=json.dumps(_VALID_ANALYSIS))):
         result = client.analyze(_TASK_SPEC, json_schema=ANALYSIS_SCHEMA, timeout=900)
@@ -148,13 +148,73 @@ def test_mocked_success_direct_object() -> None:
 
 def test_mocked_success_claude_envelope_string_result() -> None:
     """`claude --output-format json` wraps the result as {"type":..., "result": "<json-string>"}."""
-    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie", ipcat_mcp_config=None)
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
     client.cli_version, client.model_id, client._preflighted = "1.1.13", "2.1.198", True
     envelope = {"type": "result", "result": json.dumps(_VALID_ANALYSIS)}
     with mock.patch("subprocess.run", return_value=_proc(0, stdout=json.dumps(envelope))):
         result = client.analyze(_TASK_SPEC, json_schema=ANALYSIS_SCHEMA, timeout=900)
     assert result.parsed["codecs"][0]["part"] == "WSA8845"
     print("PASS: mocked success (claude envelope, string result) -> parsed ReasoningResult")
+
+
+def _built_argv(task_spec: dict[str, Any]) -> list[str]:
+    """Capture the argv `analyze()` actually builds, without running a subprocess."""
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
+    client.cli_version, client.model_id, client._preflighted = "1.1.13", "2.1.198", True
+    captured: dict[str, Any] = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return _proc(0, stdout=json.dumps(_VALID_ANALYSIS))
+
+    with mock.patch("subprocess.run", side_effect=_fake_run):
+        client.analyze(task_spec, json_schema=ANALYSIS_SCHEMA, timeout=900)
+    return captured["argv"]
+
+
+def test_argv_uses_bypass_permissions() -> None:
+    argv = _built_argv(_TASK_SPEC)
+    assert "--permission-mode" in argv, argv
+    idx = argv.index("--permission-mode")
+    assert argv[idx + 1] == "bypassPermissions", argv
+    assert "plan" not in argv, argv
+    print("PASS: analyze() argv uses --permission-mode bypassPermissions, not plan")
+
+
+def test_argv_uses_plugin_prefixed_mcp_allowlist() -> None:
+    argv = _built_argv(_TASK_SPEC)
+    assert "--allowedTools" in argv, argv
+    idx = argv.index("--allowedTools")
+    allowed = argv[idx + 1]
+    assert "mcp__plugin_qgenie-chat_qgenie-chat__*" in allowed, allowed
+    assert "mcp__qgenie-chat__*" not in allowed, allowed
+    print("PASS: analyze() argv allowlists the plugin-prefixed MCP tool pattern")
+
+
+def test_argv_never_emits_mcp_config() -> None:
+    task_spec_with_ipcat = {
+        "skill_id": "target_onboarding", "target": "t", "kernel": {"path": "/tmp/k"},
+        "evidence": {"ipcat_mcp": True, "ipcat_provenance": {"doc_ids": ["d1"]}},
+    }
+    for spec in (_TASK_SPEC, task_spec_with_ipcat):
+        argv = _built_argv(spec)
+        assert "--mcp-config" not in argv, argv
+    print("PASS: analyze() never emits --mcp-config, regardless of ipcat_mcp/ipcat_provenance")
+
+
+def test_prompt_includes_mcp_readiness_guidance_when_ipcat_requested() -> None:
+    from orchestrator.reasoning.client import build_prompt
+
+    task_spec_with_ipcat = {
+        "skill_id": "target_onboarding", "target": "t", "kernel": {"path": "/tmp/k"},
+        "evidence": {"ipcat_mcp": True, "ipcat_provenance": {"doc_ids": ["d1"]}},
+    }
+    prompt_with_ipcat = build_prompt(task_spec_with_ipcat)
+    assert "WaitForMcpServers" in prompt_with_ipcat, prompt_with_ipcat
+
+    prompt_without_ipcat = build_prompt(_TASK_SPEC)
+    assert "WaitForMcpServers" not in prompt_without_ipcat, prompt_without_ipcat
+    print("PASS: build_prompt() adds WaitForMcpServers guidance only when ipcat_mcp is requested")
 
 
 def test_local_engine_blocked_without_test_mode() -> None:
@@ -191,6 +251,10 @@ def main() -> None:
     test_output_schema_invalid()
     test_mocked_success_direct_object()
     test_mocked_success_claude_envelope_string_result()
+    test_argv_uses_bypass_permissions()
+    test_argv_uses_plugin_prefixed_mcp_allowlist()
+    test_argv_never_emits_mcp_config()
+    test_prompt_includes_mcp_readiness_guidance_when_ipcat_requested()
     test_local_engine_blocked_without_test_mode()
     test_local_engine_allowed_with_test_mode()
     test_unknown_engine_rejected()

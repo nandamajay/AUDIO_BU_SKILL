@@ -166,9 +166,10 @@ def _build_task_spec(
     offline = [f for f in evidence_files if f not in ipcat]
     evidence: dict[str, Any] = {"ipcat": ipcat, "offline": offline}
     if ipcat_provenance:
-        # an agent-mediated IPCAT cache exists -> let QGenie also query IPCAT live.
-        from orchestrator.reasoning.client import DEFAULT_IPCAT_MCP_CONFIG
-        evidence["ipcat_mcp"] = DEFAULT_IPCAT_MCP_CONFIG
+        # an agent-mediated IPCAT cache exists -> let QGenie also query IPCAT
+        # live via the qgenie-chat MCP plugin server (no config path needed --
+        # the plugin's own MCP server is auto-managed and pre-authenticated).
+        evidence["ipcat_mcp"] = True
         evidence["ipcat_provenance"] = ipcat_provenance
     return {
         "skill_id": "target_onboarding",

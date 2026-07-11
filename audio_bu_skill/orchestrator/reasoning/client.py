@@ -15,12 +15,18 @@ substitutes a local heuristic, never fabricates an analysis. The demoted local
 Concrete CLI surface (confirmed on this host, qgenie 1.1.13 + claude 2.1.198):
   * ``qgenie doctor --support`` — parseable env/auth/connectivity report (preflight).
   * ``qgenie claude -p <prompt> --output-format json --json-schema <inline JSON>
-     --mcp-config <ipcat mcp> --add-dir <kernel> --add-dir <evidence>
-     --permission-mode plan --allowedTools Read,Grep,Glob,mcp__qgenie-chat__*`` —
+     --add-dir <kernel> --add-dir <evidence> --permission-mode bypassPermissions
+     --allowedTools Read,Grep,Glob,mcp__plugin_qgenie-chat_qgenie-chat__*`` —
      launches Claude Code headless with QGenie endpoint/OAuth injection; the
      ``--json-schema`` flag (given the schema INLINE, not a file path — a path
      makes claude try to JSON-parse the path string itself) forces structured
-     JSON output.
+     JSON output. IPCAT/qgenie-chat MCP is reached via the qgenie-chat plugin's
+     own pre-authenticated, auto-managed MCP server — no ``--mcp-config`` is
+     passed (that flag creates a second, never-authenticated, anonymous MCP
+     server registration instead of using the plugin's already-connected one).
+     ``--permission-mode plan`` is architecturally incompatible with headless
+     ``-p`` runs (it requires a human to approve each tool call); this client
+     uses ``bypassPermissions`` instead, scoped tightly by ``--allowedTools``.
 """
 
 from __future__ import annotations
@@ -39,12 +45,22 @@ import jsonschema
 from orchestrator.reasoning.result import ReasoningResult
 from orchestrator.reasoning.schemas import ANALYSIS_SCHEMA, ANALYSIS_SCHEMA_VERSION
 
-# Default IPCAT MCP config shipped with the qgenie-chat plugin (HTTP MCP server).
-DEFAULT_IPCAT_MCP_CONFIG = (
-    "/local/mnt/workspace/qgenie/plugins/sources/QGenie__qgenie-chat/5.0.0/mcp.json"
-)
 _DEFAULT_TIMEOUT = 900  # seconds; a hard ceiling on one analysis call.
-_ALLOWED_TOOLS = "Read,Grep,Glob,mcp__qgenie-chat__*"
+# The qgenie-chat plugin's real, live MCP tool-name prefix (confirmed via a
+# live smoke test against the plugin's auto-managed, pre-authenticated MCP
+# server) -- NOT "mcp__qgenie-chat__*", which matches nothing real and was
+# the original cause of every IPCAT tool call being silently denied.
+_ALLOWED_TOOLS = "Read,Grep,Glob,mcp__plugin_qgenie-chat_qgenie-chat__*"
+# Guidance appended to the analysis prompt so the model waits for the
+# plugin's MCP server to finish its ~1.3s async connect before attempting any
+# IPCAT/qgenie-chat MCP query -- otherwise the very first turn can observe a
+# false "no MCP tools available" state (confirmed race, see client.py's
+# module docstring history / PLAYBOOK.md).
+_MCP_READINESS_GUIDANCE = (
+    "Before attempting any IPCAT or qgenie-chat MCP tool call, call the "
+    "WaitForMcpServers tool first to ensure MCP servers have finished "
+    "connecting. Do this once, at the start, before your first MCP tool use."
+)
 
 
 class ReasoningUnavailableError(Exception):
@@ -112,11 +128,9 @@ class QGenieReasoningClient(ReasoningClient):
         self,
         *,
         qgenie_bin: str | None = None,
-        ipcat_mcp_config: str | None = DEFAULT_IPCAT_MCP_CONFIG,
         model: str | None = None,
     ):
         self._qgenie_bin = qgenie_bin  # resolved in preflight if None
-        self._ipcat_mcp_config = ipcat_mcp_config
         self._model = model
         self._preflighted = False
         # QGENIE_CLI_HOME selects between independently-provisioned QGenie CLI
@@ -139,11 +153,13 @@ class QGenieReasoningClient(ReasoningClient):
         }
 
     def _mcp_snapshot(self, *, require_ipcat: bool = True) -> dict[str, Any]:
-        config = self._ipcat_mcp_config
+        # IPCAT/qgenie-chat MCP is reached via the plugin's own auto-managed,
+        # pre-authenticated MCP server -- there is no local config file to
+        # check for existence; readiness is validated live by the analysis
+        # call itself (guided by _MCP_READINESS_GUIDANCE in the prompt).
         return {
             "require_ipcat": require_ipcat,
-            "ipcat_mcp_config": config,
-            "ipcat_mcp_config_exists": Path(config).is_file() if config else False,
+            "allowed_tools": _ALLOWED_TOOLS,
         }
 
     def _diagnostics(self, *, require_ipcat: bool = True) -> dict[str, Any]:
@@ -257,15 +273,9 @@ class QGenieReasoningClient(ReasoningClient):
             )
         self._launch_state = "connectivity_checked"
 
-        # IPCAT MCP config must exist when IPCAT evidence is required
-        if require_ipcat and self._ipcat_mcp_config:
-            if not Path(self._ipcat_mcp_config).is_file():
-                raise ReasoningUnavailableError(
-                    ReasoningUnavailableError.MCP_UNAVAILABLE,
-                    f"IPCAT MCP config not found: {self._ipcat_mcp_config}",
-                    {"ipcat_mcp_config": self._ipcat_mcp_config,
-                     **self._diagnostics(require_ipcat=require_ipcat)},
-                )
+        # IPCAT/qgenie-chat MCP has no local config to check for existence --
+        # it's the plugin's own auto-managed, pre-authenticated server; its
+        # actual readiness is validated live by the analysis call, not here.
         self._launch_state = "ipcat_mcp_checked"
 
         self.cli_version = parsed.get("qgenie_version", "")
@@ -297,13 +307,11 @@ class QGenieReasoningClient(ReasoningClient):
             qgenie_bin, "claude", "-p", prompt,
             "--output-format", "json",
             "--json-schema", json.dumps(json_schema),
-            "--permission-mode", "plan",
+            "--permission-mode", "bypassPermissions",
             "--allowedTools", _ALLOWED_TOOLS,
         ]
         for add_dir in _add_dirs(task_spec):
             argv += ["--add-dir", add_dir]
-        if task_spec.get("evidence", {}).get("ipcat_mcp") and self._ipcat_mcp_config:
-            argv += ["--mcp-config", self._ipcat_mcp_config]
         if self._model:
             argv += ["--model", self._model]
 
@@ -361,9 +369,15 @@ def build_prompt(task_spec: dict[str, Any]) -> str:
 
     The model is directed to read the kernel tree + evidence files itself (via the
     Read/Grep/Glob tools it was granted) and IPCAT via the qgenie-chat MCP, then
-    return JSON matching the schema it was given by ``--json-schema``.
+    return JSON matching the schema it was given by ``--json-schema``. When IPCAT
+    MCP evidence is requested, ``_MCP_READINESS_GUIDANCE`` is prepended so the
+    model waits out the MCP server's async connect before its first MCP call.
     """
+    mcp_guidance = ""
+    if task_spec.get("evidence", {}).get("ipcat_mcp"):
+        mcp_guidance = _MCP_READINESS_GUIDANCE + "\n\n"
     return (
+        mcp_guidance +
         "You are an audio bring-up analyst. Analyze the evidence for a new SoC "
         "audio bring-up target and return ONLY the JSON object required by the "
         "provided output schema — no prose outside the JSON.\n\n"
