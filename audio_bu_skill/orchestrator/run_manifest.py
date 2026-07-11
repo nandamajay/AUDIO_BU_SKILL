@@ -227,6 +227,80 @@ def build_manifest(
     }
 
 
+def build_onboarding_manifest(
+    *,
+    run_id: str,
+    target: str,
+    attempt: int,
+    state_record: dict[str, Any],
+    target_soc: str,
+    nearest_target: str,
+    evidence_source: str,
+    kernel_source: str | None,
+    kernel_commit: str | None,
+    evidence: dict[str, str],
+    reasoning_fingerprints: dict[str, Any],
+    evidence_refs: list[str],
+) -> dict[str, Any]:
+    """build_manifest()'s counterpart for target_onboarding, which has no case.py.
+
+    Onboarding never has a BringupCase to read target_soc/nearest_target/etc.
+    from (that's the point — it's proposing one), so this takes those facts as
+    plain kwargs instead of via case attribute access. Onboarding also never
+    drives bringup_state past INIT, so final_state here is never "BLOCKED" and
+    write_artifacts's case-only blocker-report path is never exercised.
+
+    The per-attempt reproducibility contract (qgenie version, model id,
+    task_spec hash, evidence hash, kernel commit) lives entirely in
+    fingerprints below.
+    """
+    skill_invocations = state_record.get("skill_invocations", {})
+    onboarding_history = skill_invocations.get("target_onboarding", {}).get("history", [])
+    started_at = onboarding_history[0]["timestamp"] if onboarding_history else None
+    ended_at = onboarding_history[-1]["timestamp"] if onboarding_history else None
+    final_state = state_record.get("bringup_state")
+
+    transitions = [
+        {"from": t["from_state"], "to": t["to_state"], "reason": t.get("reason"),
+         "failed_gate": t.get("failed_gate"), "timestamp": t.get("timestamp")}
+        for t in onboarding_history
+    ]
+
+    fingerprints = {
+        "kernel_source": kernel_source,
+        "kernel_commit": kernel_commit,
+        "evidence": evidence,
+        "reasoning": reasoning_fingerprints,
+    }
+
+    return {
+        "run_id": run_id,
+        "target": target,
+        "attempt": attempt,
+        "target_soc": target_soc,
+        "nearest_target": nearest_target,
+        "kernel_source": kernel_source,
+        "evidence_source": evidence_source,
+        "case_version": "",
+        "inherit_from": "",
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "final_state": final_state,
+        "executed_skills": sorted(skill_invocations.keys()),
+        "skill_states": {sid: inv.get("skill_state") for sid, inv in skill_invocations.items()},
+        "state_transitions": transitions,
+        "fingerprints": fingerprints,
+        "analytics": {
+            "evidence_count": len(evidence_refs),
+            "skill_count": len(skill_invocations),
+            "blocker_count": 0,
+            "final_state": final_state,
+            "attempt": attempt,
+            "generated_artifact_count": 0,
+        },
+    }
+
+
 # --------------------------------------------------------------------------- #
 # artifact writers
 # --------------------------------------------------------------------------- #

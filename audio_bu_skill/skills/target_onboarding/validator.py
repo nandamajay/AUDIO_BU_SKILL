@@ -75,3 +75,69 @@ def validate_output(output_envelope: dict[str, Any]) -> None:
             message="must_not_finalize_uncertain_fields: power_model_source must be flagged NEEDS_REVIEW, never finalized",
             details={"power_model_source": generated.get("power_model_source")},
         )
+
+    # must_use_qgenie_engine: the intelligent path is QGenie-only in production; a
+    # "local-test" result reaching here without test_mode means the no-fallback
+    # gate in orchestrator.reasoning.get_reasoning_client was bypassed somehow —
+    # this is the last-line defense, not the primary enforcement point.
+    reasoning = output_envelope.get("_reasoning") or {}
+    engine_id = reasoning.get("engine_id")
+    if engine_id == "local-test" and not reasoning.get("test_mode"):
+        raise TargetOnboardingValidationError(
+            code="LOCAL_ENGINE_BLOCKED",
+            message="must_use_qgenie_engine: local-test engine result reached the validator outside test_mode",
+            details={"engine_id": engine_id},
+        )
+
+    # must_cite_evidence_per_finding / must_flag_missing_evidence apply to the
+    # real QGenie engine only — the demoted local-test comparator is documented
+    # to never read datasheet/IPCAT content, so holding it to the same
+    # evidentiary bar would just make the test-only escape hatch unusable.
+    if engine_id != "qgenie":
+        return
+
+    # must_cite_evidence_per_finding: every QGenie finding with a non-zero
+    # confidence must carry at least one citation — an uncited "fact" is not
+    # auditable and must not be trusted.
+    analysis = (output_envelope.get("target_profile") or {}).get("qgenie_analysis") or {}
+    uncited = _findings_without_citations(analysis)
+    if uncited:
+        raise TargetOnboardingValidationError(
+            code="FINDING_MISSING_CITATION",
+            message="must_cite_evidence_per_finding: QGenie findings with confidence > 0 must cite evidence",
+            details={"uncited_findings": uncited},
+        )
+
+    # must_flag_missing_evidence: anything QGenie listed as missing must surface
+    # in generated_case.needs_review so a human sees it before promoting the case.
+    for missing in analysis.get("missing_evidence") or []:
+        note = f"missing_evidence: {missing}"
+        if note not in needs_review:
+            raise TargetOnboardingValidationError(
+                code="MISSING_EVIDENCE_NOT_FLAGGED",
+                message="must_flag_missing_evidence: QGenie-reported missing evidence was not carried into needs_review",
+                details={"missing_evidence": missing},
+            )
+
+
+def _findings_without_citations(analysis: dict[str, Any]) -> list[str]:
+    """Return dotted-path labels of any confident finding lacking a citation."""
+    uncited: list[str] = []
+
+    def _check(label: str, block: Any) -> None:
+        if not isinstance(block, dict):
+            return
+        confidence = block.get("confidence")
+        if confidence and float(confidence) > 0 and not block.get("citations"):
+            uncited.append(label)
+
+    _check("soc", analysis.get("soc"))
+    _check("soundwire", analysis.get("soundwire"))
+    _check("power_model", analysis.get("power_model"))
+    for group_key in ("codecs", "amplifiers", "mics", "speakers", "buses"):
+        for i, item in enumerate(analysis.get(group_key) or []):
+            _check(f"{group_key}[{i}]", item)
+    for i, item in enumerate(analysis.get("nearest_targets") or []):
+        if isinstance(item, dict) and float(item.get("score") or 0) > 0 and not item.get("citations"):
+            uncited.append(f"nearest_targets[{i}]")
+    return uncited

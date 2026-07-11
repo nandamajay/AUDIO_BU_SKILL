@@ -72,3 +72,9 @@ id_ed25519*
 # Keep empty evidence folders (negate the evidence ignores above)
 !audio_bu_skill/targets/*/evidence/ipcat/.gitkeep
 !audio_bu_skill/targets/*/evidence/offline/.gitkeep
+
+# QGenie reasoning artifacts that may embed confidential evidence content/paths —
+# never commit the prompt or the raw model transcript. qgenie_analysis.json (the
+# validated structured result) and reasoning_error.json are safe to track.
+audio_bu_skill/targets/*/qgenie_task_spec.json
+audio_bu_skill/targets/*/qgenie_raw_output.txt

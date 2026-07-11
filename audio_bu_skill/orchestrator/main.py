@@ -18,8 +18,13 @@ Three modes:
     python -m orchestrator.main --rerun nord-iq10-audio-bringup-2026-07
 
     # onboard a new target: detect nearest target + propose case.generated.py
-    # (v1.1 Phase 1 — read-only, never writes case.py, never generates code)
+    # (v1.2 — read-only, never writes case.py, never generates code; reasoning is
+    # QGenie/Claude-backed and mandatory, no silent local fallback)
     python -m orchestrator.main --onboard my-new-target --kernel-source linux-nord
+
+    # test-only: exercise the demoted local comparator instead of QGenie
+    python -m orchestrator.main --onboard my-new-target --kernel-source linux-nord \
+        --analysis-engine local-test --test-mode
 
 Kernel-source resolution (first present wins): --kernel-source, then the case's
 own kernel_source_path; a run fails only if neither yields a valid kernel tree.
@@ -30,17 +35,30 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
-from orchestrator import run_manifest
+from orchestrator import run_manifest, run_store
 from orchestrator.bringup_walk import BringupCase, EVIDENCE_SOURCES, merge_cases, run_bringup, validate_case
 from orchestrator.driver import BringupOrchestrator, OrchestratorError
+from orchestrator.reasoning import ReasoningUnavailableError, get_reasoning_client
+from orchestrator.reasoning.result import reasoning_fingerprints
 from orchestrator.runners.codec_driver_porting_runner import run_codec_driver_porting
 from orchestrator.runners.source_intake_runner import discover_evidence, run_source_intake
-from orchestrator.runners.target_onboarding_runner import run_target_onboarding
+from orchestrator.runners.target_onboarding_runner import resolve_onboarding_task_spec, run_target_onboarding
 from orchestrator.runners.triage_runner import run_triage
 from orchestrator.workspace_loader import load_workspace_context
+
+# skill_state values for which a target_onboarding invocation is "done" for
+# attempt-selection purposes. SUCCESS counts as terminal here even though
+# skill_state_machine.TERMINAL_STATES excludes it: onboarding's
+# requires_human_review:true means SUCCESS never auto-advances to APPROVED,
+# so treating SUCCESS as non-terminal would permanently block re-onboarding
+# (there is deliberately no (SUCCESS, READY) transition — see do_onboard).
+_ONBOARDING_TERMINAL_SKILL_STATES = {"SUCCESS", "FAILED", "APPROVED", "SKIPPED"}
+
+ANALYSIS_ENGINES = ("qgenie", "local-test")
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_ROOT = WORKSPACE_ROOT / "audio_bu_skill" / "skills"
@@ -129,9 +147,19 @@ def parse_args() -> argparse.Namespace:
                         help="override the case's evidence_source (default: use the case's own value)")
     parser.add_argument("--kernel-source", default=None,
                         help="path to the kernel git checkout (default: the case's kernel_source_path)")
+    parser.add_argument("--analysis-engine", choices=ANALYSIS_ENGINES, default="qgenie",
+                        help="reasoning engine for --onboard (default: qgenie, the only production engine); "
+                             "'local-test' is a demoted regression comparator, rejected unless --test-mode is also set")
+    parser.add_argument("--test-mode", action="store_true",
+                        help="required alongside --analysis-engine local-test to unlock the demoted local comparator")
+    parser.add_argument("--analysis-timeout", type=int, default=None, metavar="SECONDS",
+                        help="override the QGenie analysis subprocess timeout (default: 900s); "
+                             "raise this for large kernel trees / evidence sets that legitimately need longer")
     args = parser.parse_args()
     if not (args.target or args.replay or args.rerun or args.onboard):
         parser.error("one of --target, --replay, --rerun, or --onboard is required")
+    if args.analysis_engine == "local-test" and not args.test_mode:
+        parser.error("--analysis-engine local-test requires --test-mode (no silent local fallback in production)")
     return args
 
 
@@ -157,6 +185,9 @@ def do_replay(run_id: str) -> None:
 
 def do_rerun(run_id: str, cli_kernel_source: str | None) -> int:
     recorded = run_manifest.load_manifest(WORKSPACE_ROOT, run_id)
+    if "attempt" in recorded:
+        # onboarding runs have no case.py yet — route to the reasoning-only path.
+        return _do_rerun_onboarding(recorded, cli_kernel_source)
     target = recorded["target"]
 
     case = load_case(target)
@@ -172,6 +203,64 @@ def do_rerun(run_id: str, cli_kernel_source: str | None) -> int:
     drift = run_manifest.diff_fingerprints(recorded.get("fingerprints", {}), current)
     if not drift:
         print(f"REPEATABLE — inputs for {run_id} are unchanged since the recorded run")
+        return 0
+    print(f"DRIFT DETECTED — {len(drift)} input(s) changed since the recorded run:")
+    for line in drift:
+        print(f"  {line}")
+    return 2
+
+
+def _do_rerun_onboarding(recorded: dict, cli_kernel_source: str | None) -> int:
+    """--rerun for an onboarding run (no case.py exists yet).
+
+    Recomputes the reasoning fingerprints' *inputs* — task_spec hash, kernel
+    commit, evidence hashes, IPCAT provenance id, and (via a cheap `doctor`
+    probe only, never a re-analysis) the current QGenie profile/model/CLI
+    identity — and diffs them against the recorded run's fingerprints. Never
+    re-invokes QGenie's analyze(); --rerun is a fingerprint diff, not a
+    re-analysis, mirroring the v1.0 --rerun contract.
+    """
+    target = recorded["target"]
+    target_dir = TARGETS_ROOT / target
+    kernel_source = validate_kernel_source(cli_kernel_source or recorded.get("kernel_source") or "")
+    evidence_roots, _ = _resolve_evidence_roots(target, target_dir)
+
+    resolved = resolve_onboarding_task_spec(WORKSPACE_ROOT, target, kernel_source, evidence_roots)
+
+    recorded_reasoning = (recorded.get("fingerprints") or {}).get("reasoning", {}) or {}
+    engine_id = recorded_reasoning.get("engine_id") or "qgenie"
+    client = get_reasoning_client(engine_id, test_mode=(engine_id == "local-test"))
+    profile_note: str | None = None
+    try:
+        client.preflight(require_ipcat=bool(resolved["ipcat_provenance"]))
+    except ReasoningUnavailableError as exc:
+        profile_note = f"{exc.code}: {exc.message}"
+
+    current_reasoning = reasoning_fingerprints(
+        task_spec=resolved["task_spec"], engine_id=engine_id,
+        model_id=getattr(client, "model_id", "") or "",
+        cli_version=getattr(client, "cli_version", "") or "",
+        schema_version=recorded_reasoning.get("schema_version", ""),
+        ipcat_provenance=resolved["ipcat_provenance"],
+        qgenie_cli_home=getattr(client, "qgenie_cli_home", None),
+        config_root=getattr(client, "config_root", None),
+        data_root=getattr(client, "data_root", None),
+        kernel_commit=resolved["kernel_commit"],
+        evidence_sha256=resolved["evidence_sha256"],
+    )
+    current = {
+        "kernel_source": kernel_source,
+        "kernel_commit": resolved["kernel_commit"],
+        "evidence": resolved["evidence_sha256"],
+        "reasoning": current_reasoning,
+    }
+    if profile_note:
+        print(f"  NOTE: could not verify the current QGenie profile — {profile_note}")
+        print("        (model_id/cli_version/config_root/data_root drift below may be incomplete)")
+
+    drift = run_manifest.diff_fingerprints(recorded.get("fingerprints", {}), current)
+    if not drift:
+        print(f"REPEATABLE — inputs for {recorded['run_id']} are unchanged since the recorded run")
         return 0
     print(f"DRIFT DETECTED — {len(drift)} input(s) changed since the recorded run:")
     for line in drift:
@@ -251,15 +340,116 @@ def _record_artifacts(target, case, workspace_context, orchestrator) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# onboarding mode (v1.1 Phase 1) — standalone; never enters run_bringup
+# onboarding attempt model (v1.2) — attempt-scoped run_ids, no FSM changes
 # --------------------------------------------------------------------------- #
-def do_onboard(target: str, cli_kernel_source: str | None) -> None:
+def _onboarding_run_id_for_attempt(target: str, attempt: int) -> str:
+    # Attempt 1 stays unsuffixed so pre-existing state/<target>-onboarding.json
+    # (from before the attempt model) is recognized as attempt 1, not orphaned.
+    return f"{target}-onboarding" if attempt == 1 else f"{target}-onboarding-{attempt}"
+
+
+def _existing_onboarding_attempts(target: str) -> dict[int, str]:
+    """Map attempt number -> run_id for every persisted onboarding attempt."""
+    state_dir = WORKSPACE_ROOT / "audio_bu_skill" / "state"
+    if not state_dir.is_dir():
+        return {}
+    pattern = re.compile(rf"^{re.escape(target)}-onboarding(?:-(\d+))?\.json$")
+    attempts: dict[int, str] = {}
+    for path in state_dir.iterdir():
+        m = pattern.match(path.name)
+        if not m:
+            continue
+        attempts[int(m.group(1)) if m.group(1) else 1] = path.stem
+    return attempts
+
+
+def _resolve_onboarding_run_id(target: str) -> tuple[str, int, bool]:
+    """Select the run_id for this onboarding invocation.
+
+    Resumes the latest attempt if it's still in-flight (non-terminal);
+    allocates a new attempt number if the latest is terminal or none exists
+    yet. This is purely a run_id choice made before invoke_skill runs, so it
+    needs no FSM change: a terminal SUCCESS just gets a fresh run_id instead
+    of an illegal (SUCCESS, READY) re-entry into the same one.
+
+    Returns (run_id, attempt_number, is_new_attempt).
+    """
+    attempts = _existing_onboarding_attempts(target)
+    if not attempts:
+        return _onboarding_run_id_for_attempt(target, 1), 1, True
+
+    latest_attempt = max(attempts)
+    latest_run_id = attempts[latest_attempt]
+    record = run_store.load_run(WORKSPACE_ROOT, latest_run_id) or {}
+    skill_state = record.get("skill_invocations", {}).get("target_onboarding", {}).get("skill_state")
+    if skill_state in _ONBOARDING_TERMINAL_SKILL_STATES:
+        next_attempt = latest_attempt + 1
+        return _onboarding_run_id_for_attempt(target, next_attempt), next_attempt, True
+    return latest_run_id, latest_attempt, False
+
+
+def _hash_evidence_files(evidence_files: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for f in evidence_files:
+        fp = Path(f)
+        if not fp.is_file():
+            continue
+        try:
+            rel = fp.relative_to(WORKSPACE_ROOT)
+        except ValueError:
+            rel = fp
+        out[str(rel)] = run_manifest._sha256_file(fp)
+    return out
+
+
+def _record_onboarding_artifacts(*, target: str, run_id: str, attempt: int, kernel_source: str,
+                                  output: dict, orchestrator: BringupOrchestrator) -> None:
+    """Write durable per-attempt artifacts to artifacts/<run_id>/, mirroring
+    do_run's _record_artifacts but without a case object (onboarding has none
+    yet). Records the 5 mandated reproducibility fields: qgenie version and
+    model id and task_spec hash (all inside reasoning fingerprints), plus
+    evidence hash and kernel commit computed directly here.
+    """
+    state_record = orchestrator.resume_run()
+    reasoning = output.get("_reasoning") or {}
+    evidence_files = (output.get("evidence_inventory") or {}).get("files", []) or []
+    evidence = _hash_evidence_files(evidence_files)
+    kernel_commit = run_manifest._kernel_commit(kernel_source)
+
+    evidence_refs = (output.get("evidence") or {}).get("evidence_refs", [])
+    conf = (output.get("similarity_report") or {}).get("confidence", {})
+    generated_case = output.get("generated_case") or {}
+
+    manifest = run_manifest.build_onboarding_manifest(
+        run_id=run_id, target=target, attempt=attempt, state_record=state_record,
+        target_soc=generated_case.get("target_soc", target),
+        nearest_target=conf.get("top") or "(pending onboarding)",
+        evidence_source=generated_case.get("evidence_source", ""),
+        kernel_source=kernel_source, kernel_commit=kernel_commit,
+        evidence=evidence, reasoning_fingerprints=reasoning.get("fingerprints", {}),
+        evidence_refs=evidence_refs,
+    )
+    skill_outputs = dict(run_manifest.load_skill_outputs(WORKSPACE_ROOT, run_id))
+    skill_outputs.update(orchestrator.last_outputs)
+    result = run_manifest.write_artifacts(
+        workspace_root=WORKSPACE_ROOT, run_id=run_id, manifest=manifest, state_record=state_record,
+        evidence_refs=evidence_refs, evidence_provenance=None, skill_outputs=skill_outputs, case=None,
+    )
+    print(f"  wrote {len(result['files'])} attempt artifacts to {result['dir']}")
+
+
+def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str = "qgenie",
+                test_mode: bool = False, analysis_timeout: int | None = None) -> None:
     """Detect the nearest existing target and propose targets/<target>/case.generated.py.
 
     Read-only w.r.t. the kernel tree and case.py: it invokes only the
     target_onboarding skill (which stops at SUCCESS behind the human-review gate),
     then writes proposal artifacts. It NEVER calls run_bringup, drives no BringupState
     transition past INIT, generates no kernel code, and never writes case.py.
+
+    The reasoning step is QGenie/Claude-backed and MANDATORY (no silent fallback):
+    if it's unavailable, this writes reasoning_error.json and exits non-zero
+    instead of producing a fabricated or low-confidence local guess.
     """
     if not cli_kernel_source:
         raise SystemExit("--onboard requires --kernel-source (no case.py exists yet for a new target)")
@@ -267,9 +457,11 @@ def do_onboard(target: str, cli_kernel_source: str | None) -> None:
 
     target_dir = TARGETS_ROOT / target
     target_dir.mkdir(parents=True, exist_ok=True)
-    evidence_roots = _default_evidence_roots(target, target_dir)
+    evidence_roots, evidence_note = _resolve_evidence_roots(target, target_dir)
+    if evidence_note:
+        print(f"  evidence: {evidence_note}")
 
-    run_id = f"{target}-onboarding"
+    run_id, attempt, is_new_attempt = _resolve_onboarding_run_id(target)
     workspace_context = load_workspace_context(WORKSPACE_ROOT)
     workspace_context["kernel_source"] = kernel_source
 
@@ -281,7 +473,9 @@ def do_onboard(target: str, cli_kernel_source: str | None) -> None:
         if exc.code != "RUN_NOT_FOUND":
             raise
         orchestrator.start_run(target_soc=target, nearest_target="(pending onboarding)")
-    print(f"onboarding {target} (run {run_id})")
+    status = "new attempt" if is_new_attempt else "resuming in-flight attempt"
+    print(f"onboarding {target} (run {run_id}, attempt {attempt} [{status}], "
+          f"engine={analysis_engine}{'  [TEST MODE]' if test_mode else ''})")
 
     envelope = {
         "workspace_context": workspace_context,
@@ -289,10 +483,23 @@ def do_onboard(target: str, cli_kernel_source: str | None) -> None:
         "kernel_source_path": cli_kernel_source,
         "run_id": run_id,
         "evidence_roots": evidence_roots,
+        "analysis_engine": analysis_engine,
+        "test_mode": test_mode,
+        "analysis_timeout": analysis_timeout,
     }
-    output = orchestrator.invoke_skill("target_onboarding", envelope)
+    try:
+        output = orchestrator.invoke_skill("target_onboarding", envelope)
+    except OrchestratorError as exc:
+        cause = exc.__cause__
+        if isinstance(cause, ReasoningUnavailableError):
+            _write_reasoning_error_artifact(target_dir, cause)
+            print(f"FAILED: QGenie/IPCAT analysis unavailable — {cause.code}: {cause.message}", file=sys.stderr)
+            raise SystemExit(1) from cause
+        raise
 
     _write_onboarding_artifacts(target_dir, output)
+    _record_onboarding_artifacts(target=target, run_id=run_id, attempt=attempt,
+                                  kernel_source=kernel_source, output=output, orchestrator=orchestrator)
 
     conf = output["similarity_report"]["confidence"]
     top = conf.get("top") or "(none)"
@@ -303,16 +510,66 @@ def do_onboard(target: str, cli_kernel_source: str | None) -> None:
     print(f"  NEXT: review case.generated.py, then `mv {target_dir}/case.generated.py {target_dir}/case.py` to activate")
 
 
-def _default_evidence_roots(target: str, target_dir: Path) -> dict[str, str]:
-    """The per-target evidence convention: targets/<name>/evidence/{ipcat,offline}."""
-    (target_dir / "evidence" / "ipcat").mkdir(parents=True, exist_ok=True)
-    (target_dir / "evidence" / "offline").mkdir(parents=True, exist_ok=True)
-    base = f"audio_bu_skill/targets/{target}/evidence"
-    return {"ipcat": f"{base}/ipcat", "offline_documents": f"{base}/offline"}
+def _write_reasoning_error_artifact(target_dir: Path, exc: ReasoningUnavailableError) -> None:
+    """On QGenie unavailability, write ONLY a structured error artifact — never a
+    fabricated/local-guess profile, and never case.generated.py."""
+    from datetime import datetime, timezone
+    payload = {
+        "code": exc.code,
+        "message": exc.message,
+        "details": exc.details,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    }
+    (target_dir / "reasoning_error.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _resolve_evidence_roots(target: str, target_dir: Path) -> tuple[dict[str, str], str]:
+    """Discover the REAL evidence roots for a target; never fabricate empty ones.
+
+    The v1.1 bug: this created empty ``evidence/{ipcat,offline}`` dirs and pointed
+    the runner at them, so real datasheets sitting in a sibling ``offline/`` /
+    ``ipcat/`` folder were never seen (files:[] → codecs:[] → misleading result).
+
+    Resolution per source, first non-empty wins, checked in this order:
+      1. ``targets/<t>/evidence/<sub>``  (the documented convention)
+      2. ``targets/<t>/<legacy>``        (legacy sibling: ``offline/`` / ``ipcat/``)
+    A root is only included if it exists AND contains at least one file. We do NOT
+    mkdir empty dirs — if nothing is found, the key is omitted so the downstream
+    evidence gate fails honestly rather than on a fabricated empty directory.
+
+    Returns (evidence_roots, human-readable note).
+    """
+    base_rel = f"audio_bu_skill/targets/{target}/evidence"
+    # (root_key, [candidate relative dirs in priority order])
+    plan = [
+        ("ipcat", [f"{base_rel}/ipcat", f"audio_bu_skill/targets/{target}/ipcat"]),
+        ("offline_documents", [f"{base_rel}/offline", f"audio_bu_skill/targets/{target}/offline"]),
+    ]
+    roots: dict[str, str] = {}
+    notes: list[str] = []
+    for root_key, candidates in plan:
+        for rel in candidates:
+            abs_dir = WORKSPACE_ROOT / rel
+            if abs_dir.is_dir() and _dir_has_file(abs_dir):
+                roots[root_key] = rel
+                notes.append(f"{root_key} -> {rel}")
+                break
+    if not roots:
+        notes.append(
+            f"NO EVIDENCE FOUND under targets/{target}/ (evidence/{{ipcat,offline}} "
+            "or legacy ipcat/, offline/) — the evidence gate will fail; drop "
+            "datasheets/schematics/IPCAT exports in first"
+        )
+    return roots, "; ".join(notes)
+
+
+def _dir_has_file(directory: Path) -> bool:
+    return any(f.is_file() for f in directory.rglob("*"))
 
 
 def _write_onboarding_artifacts(target_dir: Path, output: dict) -> None:
-    """Write the 5 proposal artifacts. NEVER writes case.py."""
+    """Write the proposal artifacts. NEVER writes case.py."""
+    reasoning = output.get("_reasoning") or {}
     (target_dir / "profile.json").write_text(
         json.dumps(output["target_profile"], indent=2) + "\n", encoding="utf-8")
     (target_dir / "similarity_report.json").write_text(
@@ -323,6 +580,15 @@ def _write_onboarding_artifacts(target_dir: Path, output: dict) -> None:
         _render_case_generated(output["generated_case"]), encoding="utf-8")
     (target_dir / "onboarding_report.md").write_text(
         _render_onboarding_report(output), encoding="utf-8")
+    if reasoning:
+        # gitignored — may embed confidential evidence paths/content; artifact only,
+        # never JSONL/state (RAW_CONTENT_FORBIDDEN).
+        (target_dir / "qgenie_task_spec.json").write_text(
+            json.dumps(reasoning.get("task_spec", {}), indent=2) + "\n", encoding="utf-8")
+        (target_dir / "qgenie_raw_output.txt").write_text(
+            reasoning.get("raw_text", ""), encoding="utf-8")
+        (target_dir / "qgenie_analysis.json").write_text(
+            json.dumps(reasoning.get("analysis", {}), indent=2) + "\n", encoding="utf-8")
 
 
 def _py_literal(value) -> str:
@@ -493,7 +759,8 @@ def main() -> None:
     if args.rerun:
         sys.exit(do_rerun(args.rerun, args.kernel_source))
     if args.onboard:
-        do_onboard(args.onboard, args.kernel_source)
+        do_onboard(args.onboard, args.kernel_source, args.analysis_engine, args.test_mode,
+                   analysis_timeout=args.analysis_timeout)
         return
     do_run(args.target, args.evidence_source, args.kernel_source)
 

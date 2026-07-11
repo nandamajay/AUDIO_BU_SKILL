@@ -124,6 +124,10 @@ def test_onboard_smoke() -> None:
                 "ipcat": f"audio_bu_skill/targets/{new_target}/evidence/ipcat",
                 "offline_documents": f"audio_bu_skill/targets/{new_target}/evidence/offline",
             },
+            # v1.2: reasoning is QGenie-backed by default; this smoke test exercises
+            # the demoted local-similarity comparator instead of a live QGenie call.
+            "analysis_engine": "local-test",
+            "test_mode": True,
         }
 
         # NOTE: run the runner with cwd-independent absolute workspace_root; the
