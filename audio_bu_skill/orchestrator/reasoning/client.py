@@ -253,12 +253,14 @@ class QGenieReasoningClient(ReasoningClient):
             )
         self._launch_state = "auth_checked"
 
-        # the claude harness must be launch_ready (that is the reasoning entrypoint)
+        # the claude harness must be functionally usable as the reasoning
+        # entrypoint -- see `_is_claude_harness_functional` for why this is
+        # NOT the same thing as requiring the literal `launch_ready` token.
         claude_status = parsed.get("harness_claude", "")
-        if "launch_ready" not in claude_status:
+        if not _is_claude_harness_functional(claude_status):
             raise ReasoningUnavailableError(
                 ReasoningUnavailableError.ENV_INVALID,
-                f"the claude harness is not launch_ready (doctor: {claude_status!r})",
+                f"the claude harness is not usable (doctor: {claude_status!r})",
                 {"harness_claude": claude_status, **self._diagnostics(require_ipcat=require_ipcat)},
             )
         self._launch_state = "claude_ready_checked"
@@ -393,6 +395,14 @@ def build_prompt(task_spec: dict[str, Any]) -> str:
         "the power model: set power_model.needs_review = true always. If evidence "
         "is insufficient to identify something, say so in missing_evidence and "
         "lower the confidence rather than guessing.\n\n"
+        "Also self-report your IPCAT usage in `ipcat_findings`: set `queried` to "
+        "whether you actually called an IPCAT/qgenie-chat MCP tool this session; "
+        "`returned_target_specific` to whether any IPCAT result was specific to "
+        "this target/SoC (not generic multi-SoC boilerplate); "
+        "`returned_generic_only` to whether IPCAT returned results but none were "
+        "target-specific; and `notes`/`citations` for detail. This is diagnostic "
+        "only — we cannot observe your MCP calls ourselves, so be honest even if "
+        "IPCAT was unhelpful.\n\n"
         "TASK SPEC (paths and references only):\n"
         f"{json.dumps(task_spec, indent=2, sort_keys=True)}\n"
     )
@@ -439,6 +449,33 @@ def _tail(text: str | None, limit: int = 800) -> str:
     if not text:
         return ""
     return text[-limit:]
+
+
+_CLAUDE_HARNESS_BROKEN_TOKENS = ("missing", "config_missing")
+
+
+def _is_claude_harness_functional(status: str) -> bool:
+    """Is the claude harness usable as the reasoning entrypoint?
+
+    ``qgenie doctor --support`` emits a comma-separated ``<install-state>,
+    <config-state>, <launch-state>, version=...`` status for the claude
+    harness. ``launch_ready`` additionally requires the binary to be a
+    QGenie-*managed* install (see ``qgenie doctor claude --verbose``'s
+    "External binary" note) -- that is an install-provenance fact, not a
+    functional-readiness one. A harness that is ``installed`` and
+    ``config_ready`` but externally-installed reports ``launch_blocked`` even
+    though ``qgenie claude -p ...`` launches it successfully (confirmed live).
+    So we gate on the two functional tokens (``installed``, ``config_ready``)
+    and explicitly reject the broken-state tokens, rather than requiring
+    ``launch_ready`` verbatim.
+    """
+    if not status:
+        return False
+    return (
+        "installed" in status
+        and "config_ready" in status
+        and not any(tok in status for tok in _CLAUDE_HARNESS_BROKEN_TOKENS)
+    )
 
 
 # --------------------------------------------------------------------------- #

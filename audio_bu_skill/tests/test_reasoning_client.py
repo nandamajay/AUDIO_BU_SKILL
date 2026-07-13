@@ -86,6 +86,96 @@ def test_doctor_nonzero_exit() -> None:
     print("PASS: `qgenie doctor` nonzero exit -> QGENIE_ENV_INVALID")
 
 
+def test_claude_launch_blocked_but_functional_is_accepted() -> None:
+    """installed + config_ready + launch_blocked (externally-installed binary,
+    not QGenie-managed) must still pass preflight -- doctor's launch_blocked
+    here is an install-ownership signal, not a functional-readiness one."""
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
+    doctor = _DOCTOR_OK.replace(
+        "claude:   installed, config_ready, launch_ready, version=2.1.198",
+        "claude:   installed, config_ready, launch_blocked, version=2.1.198",
+    )
+    with mock.patch("subprocess.run", return_value=_proc(0, stdout=doctor)):
+        client.preflight()  # must not raise
+    assert client._preflighted
+    print("PASS: installed+config_ready+launch_blocked -> preflight succeeds")
+
+
+def test_claude_launch_ready_still_accepted() -> None:
+    """Regression guard: the original fully-qualified passing case still passes."""
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
+    with mock.patch("subprocess.run", return_value=_proc(0, stdout=_DOCTOR_OK)):
+        client.preflight()
+    assert client._preflighted
+    print("PASS: installed+config_ready+launch_ready (original case) unaffected")
+
+
+def test_claude_missing_binary_still_rejected() -> None:
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
+    doctor = _DOCTOR_OK.replace(
+        "claude:   installed, config_ready, launch_ready, version=2.1.198",
+        "claude:   missing, config_missing, launch_blocked, version=-",
+    )
+    with mock.patch("subprocess.run", return_value=_proc(0, stdout=doctor)):
+        try:
+            client.preflight()
+            raise AssertionError("expected ReasoningUnavailableError")
+        except ReasoningUnavailableError as exc:
+            assert exc.code == ReasoningUnavailableError.ENV_INVALID, exc.code
+    print("PASS: missing binary + missing config -> QGENIE_ENV_INVALID")
+
+
+def test_claude_config_missing_only_still_rejected() -> None:
+    """installed but config_missing (e.g. corrupt settings) must stay rejected."""
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
+    doctor = _DOCTOR_OK.replace(
+        "claude:   installed, config_ready, launch_ready, version=2.1.198",
+        "claude:   installed, config_missing, launch_blocked, version=2.1.198",
+    )
+    with mock.patch("subprocess.run", return_value=_proc(0, stdout=doctor)):
+        try:
+            client.preflight()
+            raise AssertionError("expected ReasoningUnavailableError")
+        except ReasoningUnavailableError as exc:
+            assert exc.code == ReasoningUnavailableError.ENV_INVALID, exc.code
+    print("PASS: config_missing -> QGENIE_ENV_INVALID even if 'installed' present")
+
+
+def test_claude_empty_or_malformed_status_rejected() -> None:
+    """An empty/missing `claude:` line in the doctor report must stay rejected."""
+    client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
+    doctor = _DOCTOR_OK.replace(
+        "  claude:   installed, config_ready, launch_ready, version=2.1.198\n", ""
+    )
+    with mock.patch("subprocess.run", return_value=_proc(0, stdout=doctor)):
+        try:
+            client.preflight()
+            raise AssertionError("expected ReasoningUnavailableError")
+        except ReasoningUnavailableError as exc:
+            assert exc.code == ReasoningUnavailableError.ENV_INVALID, exc.code
+    print("PASS: empty/malformed claude status -> QGENIE_ENV_INVALID")
+
+
+def test_is_claude_harness_functional_unit() -> None:
+    """Direct unit coverage of the helper's decision table."""
+    from orchestrator.reasoning.client import _is_claude_harness_functional
+
+    assert _is_claude_harness_functional(
+        "installed, config_ready, launch_blocked, version=2.1.198"
+    )
+    assert _is_claude_harness_functional(
+        "installed, config_ready, launch_ready, version=2.1.198"
+    )
+    assert not _is_claude_harness_functional(
+        "missing, config_missing, launch_blocked, version=-"
+    )
+    assert not _is_claude_harness_functional(
+        "installed, config_missing, launch_blocked, version=2.1.198"
+    )
+    assert not _is_claude_harness_functional("")
+    print("PASS: _is_claude_harness_functional decision table")
+
+
 def test_analysis_timeout() -> None:
     client = QGenieReasoningClient(qgenie_bin="/fake/qgenie")
     client.cli_version, client.model_id, client._preflighted = "1.1.13", "2.1.198", True
@@ -245,6 +335,12 @@ def main() -> None:
     test_cli_not_found()
     test_auth_not_configured()
     test_doctor_nonzero_exit()
+    test_claude_launch_blocked_but_functional_is_accepted()
+    test_claude_launch_ready_still_accepted()
+    test_claude_missing_binary_still_rejected()
+    test_claude_config_missing_only_still_rejected()
+    test_claude_empty_or_malformed_status_rejected()
+    test_is_claude_harness_functional_unit()
     test_analysis_timeout()
     test_analysis_nonzero_exit()
     test_output_unparseable()
