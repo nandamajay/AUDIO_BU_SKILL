@@ -43,6 +43,7 @@ from orchestrator import run_manifest, run_store
 from orchestrator.bringup_walk import BringupCase, EVIDENCE_SOURCES, merge_cases, run_bringup, validate_case
 from orchestrator.driver import BringupOrchestrator, OrchestratorError
 from orchestrator.reasoning import ReasoningUnavailableError, get_reasoning_client
+from orchestrator.reasoning import cardinality as cardinality_authority
 from orchestrator.reasoning import ledger as confidence_ledger
 from orchestrator.reasoning.result import reasoning_fingerprints
 from orchestrator.runners.codec_driver_porting_runner import run_codec_driver_porting
@@ -832,6 +833,63 @@ def _render_confidence_ledger(gc: dict) -> list[str]:
     return lines
 
 
+_CARDINALITY_VERDICT_GLYPH: dict[str, str] = {
+    cardinality_authority.VERDICT_AGREE: "✅ agree",
+    cardinality_authority.VERDICT_DISAGREE: "⚠️ disagree",
+    cardinality_authority.VERDICT_DISAGREE_WITH_AUTHORITY: "⚠️ disagree_with_authority",
+    cardinality_authority.VERDICT_NOT_CROSS_CHECKABLE: "ℹ️ not_cross_checkable",
+    cardinality_authority.VERDICT_BENIGN_DIVERGENCE: "ℹ️ benign_divergence",
+}
+
+
+def _render_cardinality_section(gc: dict) -> list[str]:
+    """Track C / WP-C: per-element-class cardinality cross-check rendered as an
+    additive report section. Diagnostic-only — no onboarding decision, promotion,
+    or gating path reads it (mirrors the Confidence Ledger contract).
+
+    Reads only `gc["audio_topology"]["element_counts"]` (schema 1.3.0 / Fix A),
+    null-guarded like the sibling `_render_*_section(gc)` code. Returns [] when a
+    case carries no element_counts (a pre-1.3.0 run), so the section simply does
+    not appear and older reports are byte-unchanged."""
+    if not gc:
+        return []
+    rows = cardinality_authority.compare_element_counts(gc)
+    if not rows:
+        return []
+    lines = [
+        "",
+        "## Cardinality Authority",
+        "",
+        "Per-element-class instance-count cross-check across independent "
+        "enumeration lanes (dt / evidence / proposal; catalog is the post-SWI "
+        "authority, always empty pre-SWI). **Diagnostic only — does not change "
+        "onboarding decisions.** `agree` means the available lanes report the same "
+        "count (not that the count is *correct*); `not_cross_checkable` means <2 "
+        "usable lanes (silence would falsely imply agreement); `disagree` rows are "
+        "the reviewer work list. A `dt` lane that is 0 only because the audio "
+        "scaffolding is unapplied at the pinned HEAD (`dt_applied=false`), and any "
+        "count the reasoning pass flagged `ambiguous`, are excluded from the "
+        "cross-check by design.",
+        "",
+        "| Element class | Counts (lane→n) | Verdict | KB rule | Notes |",
+        "|---------------|-----------------|---------|---------|-------|",
+    ]
+    for row in rows:
+        counts = row["counts"]
+        counts_str = ", ".join(f"{s}={n}" for s, n in counts.items()) if counts else "—"
+        verdict = _CARDINALITY_VERDICT_GLYPH.get(row["verdict"], row["verdict"])
+        rule = f"`{row['rule_id']}`" if row.get("rule_id") else "—"
+        note_parts = list(row.get("notes") or [])
+        if row.get("ambiguous"):
+            note_parts.insert(0, f"ambiguous: {row.get('ambiguity_note') or 'unresolved count'}")
+        notes_str = "; ".join(note_parts) if note_parts else "—"
+        lines.append(
+            f"| {row['element_class']} | {counts_str} | {verdict} | {rule} | {notes_str} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _render_onboarding_report(output: dict) -> str:
     """Human-readable Markdown onboarding report with cited evidence."""
     gc = output["generated_case"]
@@ -912,6 +970,7 @@ def _render_onboarding_report(output: dict) -> str:
     lines += _render_pin_crosscheck_section(gc)
     lines += _render_ipcat_findings_section(gc)
     lines += _render_confidence_ledger(gc)
+    lines += _render_cardinality_section(gc)
 
     lines += [
         "",
