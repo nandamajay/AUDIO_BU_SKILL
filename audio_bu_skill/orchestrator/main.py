@@ -43,6 +43,7 @@ from orchestrator import run_manifest, run_store
 from orchestrator.bringup_walk import BringupCase, EVIDENCE_SOURCES, merge_cases, run_bringup, validate_case
 from orchestrator.driver import BringupOrchestrator, OrchestratorError
 from orchestrator.reasoning import ReasoningUnavailableError, get_reasoning_client
+from orchestrator.reasoning import ledger as confidence_ledger
 from orchestrator.reasoning.result import reasoning_fingerprints
 from orchestrator.runners.codec_driver_porting_runner import run_codec_driver_porting
 from orchestrator.runners.source_intake_runner import discover_evidence, run_source_intake
@@ -792,6 +793,45 @@ def _render_ipcat_findings_section(gc: dict) -> list[str]:
     return lines
 
 
+def _render_confidence_ledger(gc: dict) -> list[str]:
+    """Track B / WP-B: a per-domain trust summary rendered as an additive report
+    section. Diagnostic-only — no onboarding decision or promotion path reads it.
+
+    Mirrors the sibling `_render_*_section(gc) -> list[str]` contract: reads only
+    data already in `gc` (`audio_topology` + `needs_review`), null-guarded like
+    the other sections. Renders all 9 fixed domains for any real run (a *gauge*);
+    returns [] only for a truly empty generated_case so a bare fixture is
+    unaffected. The raw analysis envelope is not available at render time, so
+    dt_topology derives from audio_topology alone (resolves to MISSING when the
+    only source is the raw envelope's buses/schematic_nets)."""
+    if not gc:
+        return []
+    rows = confidence_ledger.build_ledger(gc, None)
+    if not rows:
+        return []
+    lines = [
+        "",
+        "## Confidence Ledger",
+        "",
+        "Per-domain confidence and provenance. **Diagnostic only — does not change "
+        "onboarding decisions.** `CORROBORATED` means ≥2 sources *agree*, not that "
+        "they are *correct*. The band reflects the domain's weakest (governing) "
+        "field (conservative min-roll-up). `MISSING`/`NEEDS_REVIEW`/`VERIFY` rows "
+        "are the reviewer work list; `CORROBORATED` rows need no action.",
+        "",
+        "| Domain | Confidence | Status | Evidence source (abbrev) | KB rule |",
+        "|--------|-----------|--------|--------------------------|---------|",
+    ]
+    for row in rows:
+        sources = ", ".join(f"`{s}`" for s in row["sources"]) if row["sources"] else "—"
+        rule_ids = ", ".join(f"`{r}`" for r in row["rule_ids"]) if row["rule_ids"] else "—"
+        lines.append(
+            f"| {row['domain']} | {row['band']} | {row['status']} | {sources} | {rule_ids} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _render_onboarding_report(output: dict) -> str:
     """Human-readable Markdown onboarding report with cited evidence."""
     gc = output["generated_case"]
@@ -871,6 +911,7 @@ def _render_onboarding_report(output: dict) -> str:
     lines += _render_power_model_inspection_section(gc)
     lines += _render_pin_crosscheck_section(gc)
     lines += _render_ipcat_findings_section(gc)
+    lines += _render_confidence_ledger(gc)
 
     lines += [
         "",

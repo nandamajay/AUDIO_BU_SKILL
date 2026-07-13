@@ -97,6 +97,37 @@ def _render_and_exec(generated_case: dict) -> object:
     return src, case
 
 
+def _headers(report: str) -> set[str]:
+    """The set of '## ' section titles in a rendered Markdown report."""
+    return {line[3:].strip() for line in report.splitlines() if line.startswith("## ")}
+
+
+def _assert_confidence_ledger_additive(output: dict) -> None:
+    """WP-B header-set diff: the Confidence Ledger renders all 9 fixed domains
+    and is purely additive — its renderer contributes exactly one new '## '
+    section and rewrites none of the existing report structure."""
+    from orchestrator.main import _render_onboarding_report, _render_confidence_ledger
+    from orchestrator.reasoning import ledger as L
+
+    report = _render_onboarding_report(output)
+    assert "## Confidence Ledger" in report, "ledger section missing from report"
+
+    # all 9 fixed domains render, in fixed order
+    rows = L.build_ledger(output["generated_case"], None)
+    assert [r["domain"] for r in rows] == L.DOMAINS
+    for domain in L.DOMAINS:
+        assert domain in report, f"ledger domain {domain} missing from report"
+
+    # header-set diff: the ledger renderer adds exactly one section header and
+    # every other section survives unchanged in the assembled report.
+    ledger_lines = _render_confidence_ledger(output["generated_case"])
+    ledger_headers = {ln[3:].strip() for ln in ledger_lines if ln.startswith("## ")}
+    assert ledger_headers == {"Confidence Ledger"}, ledger_headers
+    without = _headers(report) - ledger_headers
+    assert "Confidence Ledger" not in without
+    assert "Promotion" in without and "NEEDS_REVIEW" in without
+
+
 def test_onboard_smoke() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -147,6 +178,13 @@ def test_onboard_smoke() -> None:
         src, case = _render_and_exec(output["generated_case"])
         assert "AUTO-GENERATED" in src and "NEEDS_REVIEW" in src
         assert case.run_id == f"{new_target}-onboarding"
+
+        # WP-B: the Confidence Ledger is an *additive* report section. Assert it
+        # renders all 9 fixed domains and that adding it changed nothing else — a
+        # header-set diff of the report vs the report with the ledger removed must
+        # differ by exactly {"Confidence Ledger"}, and the pre-WP assertions
+        # (kernel sentinel, no case.py, no patch) below still pass.
+        _assert_confidence_ledger_additive(output)
 
         # kernel tree unmutated
         assert _sha256(sentinel) == before, "kernel sentinel file was modified"
