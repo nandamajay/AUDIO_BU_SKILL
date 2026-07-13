@@ -507,6 +507,14 @@ def _build_audio_topology(
         topology["pin_crosschecks"] = pin_crosschecks
     if ipcat_findings:
         topology["ipcat_findings"] = ipcat_findings
+    # New in schema 1.3.0 (Fix A), optional/additive: per-element-class instance
+    # counts. Threaded through verbatim (like ipcat_findings above) so the
+    # counts are inspectable on the generated case; nothing downstream reads
+    # them yet (WP-C is out of scope). Guarded so a pre-1.3.0 analysis (no
+    # element_counts) leaves audio_topology byte-identical to before.
+    element_counts = analysis.get("element_counts")
+    if element_counts:
+        topology["element_counts"] = element_counts
     cites = _profile_cites(analysis)
     if cites:
         topology["citations"] = cites

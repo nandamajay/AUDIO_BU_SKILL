@@ -35,7 +35,17 @@ from typing import Any
 # orchestrator cannot observe live MCP tool calls itself (see
 # target_onboarding_runner._ipcat_evidence_summary), so this is the only place
 # that signal can be captured. Nothing required changed.
-ANALYSIS_SCHEMA_VERSION = "1.2.0"
+#
+# 1.3.0 (Fix A — element_counts, see docs/FIX_A_ELEMENT_COUNTS_SCHEMA_DESIGN.md):
+# additive only — adds optional `element_counts`, per-element-class instance
+# counts as typed integers from each independent enumeration lane (dt / evidence
+# / proposal / catalog). This gives the counts QGenie already surfaces in prose
+# (`"8x DMIC"`, `"2x … Speaker 0/1"`) a machine-countable home, so a future
+# Cardinality Authority (WP-C) can compare true instance counts rather than
+# list-lengths. `catalog` is declared but always null pre-SWI so the post-SWI
+# upgrade stays additive. Nothing required changed; a 1.2.0-shaped response
+# (no element_counts) still validates.
+ANALYSIS_SCHEMA_VERSION = "1.3.0"
 
 # A finding that carries per-field confidence + citations. Reused for every
 # perception signal QGenie returns so the "cite everything" rule is uniform.
@@ -90,6 +100,35 @@ _IPCAT_FINDINGS_ITEM: dict[str, Any] = {
         "notes": {"type": "string"},
         "citations": {"type": "array", "items": {"type": "string"}},
     },
+    "additionalProperties": True,
+}
+
+# New in 1.3.0, optional: per-element-class instance counts from each
+# independent enumeration lane, as typed integers (Track C / WP-C input).
+# Absent means "not reported" (a pre-1.3.0 response), NOT "count is zero".
+# Each lane value is an integer >= 0, OR null when that lane was not consulted /
+# cannot produce a count (null is distinct from an affirmative 0). `ambiguous`
+# marks a count the model itself could not resolve to a single integer (e.g.
+# Eliza "1 or 2 masters"); `dt_applied: false` marks a dt=0 that means "audio
+# scaffolding is unapplied at the pinned HEAD" rather than "absent from silicon".
+# The element_class string is validated against the known class list downstream
+# (never in this schema) so adding a class stays a config change, not a bump.
+_ELEMENT_COUNT_ITEM: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "element_class": {"type": "string"},
+        "dt": {"type": ["integer", "null"], "minimum": 0},
+        "evidence": {"type": ["integer", "null"], "minimum": 0},
+        "proposal": {"type": ["integer", "null"], "minimum": 0},
+        # Declared but always null pre-SWI — present so the post-SWI (Track D)
+        # upgrade that fills catalog_count is itself additive (no future bump).
+        "catalog": {"type": ["integer", "null"], "minimum": 0},
+        "ambiguous": {"type": "boolean"},
+        "ambiguity_note": {"type": "string"},
+        "dt_applied": {"type": "boolean"},
+        "citations": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["element_class", "citations"],
     "additionalProperties": True,
 }
 
@@ -161,6 +200,8 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
         "schematic_nets": {"type": "array", "items": _SCHEMATIC_NET_ITEM},
         # New in 1.2.0, optional: IPCAT MCP query self-report (Fix #4).
         "ipcat_findings": _IPCAT_FINDINGS_ITEM,
+        # New in 1.3.0, optional: per-element-class instance counts (Fix A).
+        "element_counts": {"type": "array", "items": _ELEMENT_COUNT_ITEM},
     },
     "required": [
         "soc",

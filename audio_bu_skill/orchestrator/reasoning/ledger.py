@@ -83,6 +83,11 @@ FIELD_DOMAIN_EXCLUDED: frozenset[str] = frozenset(
         "overall_confidence",
         "human_review_needed",
         "ipcat_findings",
+        # New in schema 1.3.0 (Fix A): per-element-class instance counts. Not a
+        # ledger trust-domain — it is WP-C (Cardinality Authority) input, which
+        # is out of scope. Excluded so the coverage test stays exhaustive; the
+        # ledger's status/band logic is unchanged and reads none of it.
+        "element_counts",
     }
 )
 
