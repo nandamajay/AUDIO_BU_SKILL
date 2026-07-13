@@ -1,0 +1,132 @@
+{
+  "_fixture_note": "SANITIZED backward-compat fixture. A structurally faithful 1.2.0-shaped analysis (no element_counts) used to prove such a document still validates under ANALYSIS_SCHEMA 1.3.0. All confidential part numbers, drawing numbers, firmware paths, absolute source paths, IPCAT document IDs and internal SoC/donor codenames have been replaced with generic placeholders. Shape, field types, empty-array and master_count:0 coverage are preserved. This models a discrete I2S/TDM-attached DAC+ADC target with no SoundWire and unapplied-at-HEAD audio scaffolding.",
+  "soc": {
+    "value": "SOC-A (discrete-codec reference target)",
+    "confidence": 0.9,
+    "citations": [
+      "targets/target-a/profile.json:2-3",
+      "kernel-a/arch/arm64/boot/dts/soc-a.dtsi:1-16",
+      "memory:target-a-audio-facts.md"
+    ]
+  },
+  "board": {
+    "value": "Target-A reference/EVK board",
+    "confidence": 0.85,
+    "citations": [
+      "targets/target-a/evidence/offline/board-schematic.pdf",
+      "targets/target-a/evidence/offline/io-mapping.xlsx"
+    ]
+  },
+  "codecs": [
+    {
+      "part": "DAC-A",
+      "role": "multi-channel DAC, primary playback codec, I2C-attached",
+      "confidence": 0.75,
+      "citations": [
+        "kernel-a/0004-enable-audio-codecs.patch (audio-codec@4c, unapplied at HEAD)",
+        "kernel-a/sound/soc/codecs/dac-a.c (upstream driver present)"
+      ]
+    },
+    {
+      "part": "ADC-A",
+      "role": "multi-channel ADC, capture codec, I2C-attached",
+      "confidence": 0.75,
+      "citations": [
+        "kernel-a/0004-enable-audio-codecs.patch (audio-codec@31, unapplied at HEAD)",
+        "kernel-a/sound/soc/codecs/adc-a.c (driver family covers this part)"
+      ]
+    }
+  ],
+  "amplifiers": [],
+  "mics": [],
+  "speakers": [],
+  "buses": [
+    "LPASS I2S (audio interface): BCLK/WS/DATA0 pins confirmed present in pinctrl driver but NOT yet wired in DT at HEAD. TDM framing @48kHz, 256xfs, MCLK from a dedicated pin",
+    "I2C bus: pin function confirmed via pinctrl driver; carries the DAC and ADC in the unapplied patch"
+  ],
+  "soundwire": {
+    "present": false,
+    "confidence": 0.7,
+    "master_count": 0,
+    "citations": [
+      "kernel-a/arch/arm64/boot/dts/target-a.dtsi (grep at HEAD: no soundwire-controller/SWR node)",
+      "kernel-a/0004-enable-audio-codecs.patch (codecs wired via I2S/TDM ports, not SoundWire)"
+    ]
+  },
+  "audio_stack": {
+    "adsp": true,
+    "apm": true,
+    "audioreach": true,
+    "gpr": true,
+    "lpass": true,
+    "q6apm": true,
+    "q6prm": true,
+    "citations": [
+      "CAVEAT: none of this exists at the task's designated kernel HEAD -- verified via grep (zero matches for adsp/audio/gpr/q6apm/q6prm/remoteproc/soundwire) and `git diff --stat HEAD` showing no local modifications to those files",
+      "kernel-a/0003-add-ADSP-remoteproc.patch (unapplied .patch file: remoteproc_adsp compatible from a donor SoC, status=disabled, GPR/q6apm/q6prm/fastrpc subtree, reg base borrowed from a donor)",
+      "kernel-a/0004-enable-audio-codecs.patch (unapplied .patch file: sound{} card, dai-links via a placeholder TDM port)",
+      "kernel-a/0005-configs-enable-Q6-AudioReach.patch present at kernel root (Kconfig enablement, not inspected line-by-line)"
+    ]
+  },
+  "power_model": {
+    "kind": "unknown",
+    "confidence": 0.25,
+    "citations": [
+      "kernel-a/0003-add-ADSP-remoteproc.patch drafts power-domains = <&rpmhpd LCX>, <&rpmhpd LMX> copied structurally from a donor reference; the patch's own commit message flags this as wrong for this target",
+      "kernel-a/drivers/pmdomain/rpmhpd.c target_rpmhpds[] verified by direct read: the drafted LCX/LMX indices are absent, so the drafted power-domains cannot probe as written",
+      "kernel-a/arch/arm64/boot/dts/soc-a.dtsi verified by direct read: includes an SCMI power model for several non-audio peripherals, establishing SCMI as a real model on this SoC family -- but does not itself wire an ADSP node, so it is not direct proof for the audio path",
+      "memory:target-a-audio-facts.md citing prior-session downstream research claiming this target's ADSP uses SCMI power domains -- a carried-over external claim, not independently re-verified this session",
+      "No SCMI proxy-domain index for an ADSP lcx/lmx equivalent was found in-tree this session -- even if SCMI is the correct family, the exact value for the ADSP path remains unknown"
+    ],
+    "needs_review": true
+  },
+  "nearest_targets": [
+    {
+      "name": "donor-soc-a",
+      "score": 0.85,
+      "rationale": "Direct structural donor: the unapplied ADSP patch reuses the donor's exact compatible string and firmware path; the entire remoteproc+AudioReach DT subtree and the sound-card compatible were ported structurally from the donor reference. The drafted rpmhpd LCX/LMX power-domains are also copied verbatim, which is why they are suspect for this target.",
+      "citations": [
+        "kernel-a/0003-add-ADSP-remoteproc.patch (donor compatible string, commit message: ported from donor reference)",
+        "kernel-a/0004-enable-audio-codecs.patch (donor firmware path; donor sound-card compatible)"
+      ]
+    },
+    {
+      "name": "donor-soc-b",
+      "score": 0.5,
+      "rationale": "Shares the donor firmware family and, unlike the primary donor, is SCMI-managed -- a closer analog for resolving this target's disputed power-domain question, since its SoC dtsi is itself SCMI-based for non-audio peripherals on the same family.",
+      "citations": [
+        "memory:target-a-audio-facts.md (firmware shared across the SoC family)",
+        "kernel-a/arch/arm64/boot/dts/soc-a.dtsi (SCMI power-domains confirmed for non-audio nodes)"
+      ]
+    },
+    {
+      "name": "target-b",
+      "score": 0.3,
+      "rationale": "Not a hardware donor match -- target-b's SoundWire codec architecture is unrelated to this target's I2S-attached DAC/ADC pair -- but methodologically relevant: target-b's own case materials independently flag the identical RPMHPD-vs-SCMI risk pattern, citing this bring-up as precedent.",
+      "citations": [
+        "targets/target-b/case.py:23"
+      ]
+    }
+  ],
+  "missing_evidence": [
+    "The entire audio DT/config scaffolding exists ONLY as loose root-level .patch files in the kernel tree; verified via `git diff --stat HEAD` (no diff) and direct grep at the designated commit (zero matches for adsp/audio/gpr/q6apm/codecs/soundwire). None of it is applied or committed at that HEAD.",
+    "ADSP PAS remoteproc register base is unresolved: the patch drafts a reg base copied from the donor, but its own inline comment states downstream boot logs show a different base -- no source this session reconciles which is correct for this silicon.",
+    "Power-domain model for the ADSP path is unresolved and must not be finalized: the rpmhpd driver table structurally excludes the drafted LCX/LMX indices; the SoC dtsi confirms SCMI is used elsewhere but does not wire the ADSP; no SCMI lcx/lmx-equivalent index exists in-tree for audio.",
+    "IPCAT was queried live this session for target-specific ADSP register base / power-domain info and returned only generic multi-SoC DSP subsystem programming guides -- no target-specific document, register map, or power-domain enumeration was found.",
+    "No amplifier, discrete microphone, or discrete speaker part number appears anywhere in the evidence (patches, dtsi, profile.json) -- the audio path as drafted is a DAC + ADC pair only, unlike SoundWire-based targets with amplifiers/DMIC arrays.",
+    "The AudioReach logical port macro for the LPASS I2S interface is an explicit placeholder in the patch -- the port header defines only PRIMARY..QUINARY with no literal macro for this interface, so the interface-to-AudioReach-port mapping is unconfirmed.",
+    "The offline binary evidence files were not re-opened this session; the interface/MCLK pin-to-net mappings rely on pinctrl source confirmation plus a prior session's memory note, which should be treated as carried-over rather than freshly verified.",
+    "The ADC reset-GPIO and MCLKIN clock source are marked \"not yet modeled\" in the patch's own text, conflicting with an earlier memory note claiming the reset was resolved -- this discrepancy is unreconciled and the schematic should be re-checked directly."
+  ],
+  "overall_confidence": 0.45,
+  "human_review_needed": true,
+  "ipcat_findings": {
+    "queried": true,
+    "returned_target_specific": false,
+    "returned_generic_only": true,
+    "notes": "Queried the IPCAT content search for target-specific ADSP register base and power-domain info. Got several hits, all generic DSP subsystem programming guides for other SoC families -- none named this target or contained a target-specific register map or power-domain table. This confirms the prior finding that the guide corpus is organized by IP-block version, not by target SoC, and structurally cannot answer target-specific register-base or power-domain questions.",
+    "citations": [
+      "IPCAT content search this session; results were generic DSP subsystem guides for other SoC families, none target-specific"
+    ]
+  }
+}

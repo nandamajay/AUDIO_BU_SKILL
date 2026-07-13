@@ -20,6 +20,10 @@ import jsonschema
 from orchestrator.reasoning.schemas import ANALYSIS_SCHEMA, ANALYSIS_SCHEMA_VERSION
 
 SKILL_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "skills" / "target_onboarding" / "schema.json"
+# Frozen real 1.2.0 analysis artifacts (Nord + Eliza), captured BEFORE the Fix A
+# re-run added element_counts. Kept as immutable fixtures so this backward-compat
+# proof is stable even after the live targets/ artifacts are regenerated at 1.3.0.
+_FIXTURES_1_2_0 = Path(__file__).resolve().parent / "fixtures" / "schema_1_2_0"
 
 _V1_0_STYLE_ANALYSIS = {
     "soc": {"value": "SA8797P", "confidence": 0.9, "citations": ["kernel/fakesoc.dtsi"]},
@@ -44,10 +48,32 @@ _V1_2_STYLE_ANALYSIS = {
     },
 }
 
+# 1.3.0 (Fix A): adds optional element_counts — per-element-class instance
+# counts as typed integers per enumeration lane. Modeled on real Eliza data
+# (dmic_line 8, amplifier 2, soundwire_master ambiguous 1-or-2).
+_V1_3_STYLE_ANALYSIS = {
+    **_V1_2_STYLE_ANALYSIS,
+    "element_counts": [
+        {
+            "element_class": "dmic_line",
+            "dt": 0, "evidence": 8, "proposal": 8, "catalog": None,
+            "ambiguous": False, "dt_applied": False,
+            "citations": ["board-block-diagram p4 (DMIC01/23/45/67 = 8)"],
+        },
+        {
+            "element_class": "soundwire_master",
+            "dt": 0, "evidence": None, "proposal": 1, "catalog": None,
+            "ambiguous": True, "dt_applied": False,
+            "ambiguity_note": "could be 1 or 2 physical masters; not resolved pre-SWI",
+            "citations": ["soundwire.master_count=1 (low confidence)"],
+        },
+    ],
+}
+
 
 def test_schema_version_bumped() -> None:
-    assert ANALYSIS_SCHEMA_VERSION == "1.2.0", ANALYSIS_SCHEMA_VERSION
-    print("PASS: ANALYSIS_SCHEMA_VERSION bumped to 1.2.0")
+    assert ANALYSIS_SCHEMA_VERSION == "1.3.0", ANALYSIS_SCHEMA_VERSION
+    print("PASS: ANALYSIS_SCHEMA_VERSION bumped to 1.3.0")
 
 
 def test_v1_0_style_analysis_still_validates() -> None:
@@ -65,6 +91,69 @@ def test_v1_2_style_analysis_validates() -> None:
     print("PASS: a 1.2.0-shaped analysis (with ipcat_findings) validates")
 
 
+def test_v1_3_style_analysis_validates() -> None:
+    jsonschema.validate(instance=_V1_3_STYLE_ANALYSIS, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: a 1.3.0-shaped analysis (with element_counts) validates")
+
+
+def test_v1_2_style_analysis_still_validates_without_element_counts() -> None:
+    # The core backward-compat guarantee: a full 1.2.0 response (no
+    # element_counts key at all) still validates under the 1.3.0 schema.
+    assert "element_counts" not in _V1_2_STYLE_ANALYSIS
+    jsonschema.validate(instance=_V1_2_STYLE_ANALYSIS, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: a 1.2.0-shaped analysis (no element_counts at all) still validates against 1.3.0 schema")
+
+
+def test_empty_element_counts_validates() -> None:
+    # [] is valid — "reported, nothing enumerated", distinct from absent.
+    doc = {**_V1_0_STYLE_ANALYSIS, "element_counts": []}
+    jsonschema.validate(instance=doc, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: element_counts: [] validates (reported-but-empty)")
+
+
+def test_element_count_missing_element_class_rejected() -> None:
+    bad = {**_V1_0_STYLE_ANALYSIS,
+           "element_counts": [{"proposal": 2, "citations": []}]}  # missing required element_class
+    try:
+        jsonschema.validate(instance=bad, schema=ANALYSIS_SCHEMA)
+        raise AssertionError("expected rejection of an element_count missing 'element_class'")
+    except jsonschema.ValidationError:
+        pass
+    print("PASS: an element_count item missing required 'element_class' is rejected")
+
+
+def test_element_count_negative_lane_rejected() -> None:
+    bad = {**_V1_0_STYLE_ANALYSIS,
+           "element_counts": [{"element_class": "dmic_line", "proposal": -1, "citations": []}]}
+    try:
+        jsonschema.validate(instance=bad, schema=ANALYSIS_SCHEMA)
+        raise AssertionError("expected rejection of a negative lane count")
+    except jsonschema.ValidationError:
+        pass
+    print("PASS: a negative element_count lane (proposal: -1) is rejected")
+
+
+def test_element_count_null_lane_validates() -> None:
+    # null is a first-class value (lane not consulted), distinct from 0.
+    doc = {**_V1_0_STYLE_ANALYSIS,
+           "element_counts": [{"element_class": "soundwire_master", "dt": 0,
+                               "evidence": None, "proposal": 1, "catalog": None,
+                               "ambiguous": True, "dt_applied": False, "citations": []}]}
+    jsonschema.validate(instance=doc, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: null lane values validate (null = lane-not-consulted, distinct from 0)")
+
+
+def test_element_count_non_integer_lane_rejected() -> None:
+    bad = {**_V1_0_STYLE_ANALYSIS,
+           "element_counts": [{"element_class": "dmic_line", "proposal": "8", "citations": []}]}
+    try:
+        jsonschema.validate(instance=bad, schema=ANALYSIS_SCHEMA)
+        raise AssertionError("expected rejection of a string lane count")
+    except jsonschema.ValidationError:
+        pass
+    print("PASS: a non-integer element_count lane (proposal: '8') is rejected")
+
+
 def test_v1_1_style_analysis_still_validates_without_ipcat_findings() -> None:
     assert "ipcat_findings" not in _V1_1_STYLE_ANALYSIS
     jsonschema.validate(instance=_V1_1_STYLE_ANALYSIS, schema=ANALYSIS_SCHEMA)  # must not raise
@@ -79,6 +168,26 @@ def test_schematic_nets_missing_gpio_rejected() -> None:
     except jsonschema.ValidationError:
         pass
     print("PASS: a schematic_net item missing required 'gpio' is rejected")
+
+
+def test_stored_1_2_0_target_artifacts_still_validate() -> None:
+    # Real-data backward-compat proof: the actual Nord + Eliza qgenie_analysis.json
+    # as produced under schema 1.2.0 (frozen fixtures, neither carrying
+    # element_counts) must still validate unchanged under the 1.3.0 schema.
+    # Uses frozen copies rather than the live targets/ artifacts, which are
+    # regenerated at 1.3.0 (with element_counts) by the Fix A re-run.
+    checked = 0
+    for target in ("nord-iq10", "eliza"):
+        path = _FIXTURES_1_2_0 / f"{target}_qgenie_analysis.json"
+        if not path.exists():
+            continue
+        analysis = json.loads(path.read_text(encoding="utf-8"))
+        assert "element_counts" not in analysis, f"{target} fixture unexpectedly has element_counts"
+        jsonschema.validate(instance=analysis, schema=ANALYSIS_SCHEMA)  # must not raise
+        checked += 1
+    assert checked == 2, f"expected 2 frozen 1.2.0 fixtures, validated {checked}"
+    print(f"PASS: {checked} frozen real 1.2.0 analysis artifact(s) still validate under 1.3.0 "
+          "(no element_counts, unchanged)")
 
 
 def test_skill_schema_json_still_valid_json_and_backward_compatible() -> None:
@@ -110,8 +219,16 @@ def main() -> None:
     test_v1_0_style_analysis_still_validates()
     test_v1_1_style_analysis_validates()
     test_v1_2_style_analysis_validates()
+    test_v1_3_style_analysis_validates()
+    test_v1_2_style_analysis_still_validates_without_element_counts()
+    test_empty_element_counts_validates()
+    test_element_count_missing_element_class_rejected()
+    test_element_count_negative_lane_rejected()
+    test_element_count_null_lane_validates()
+    test_element_count_non_integer_lane_rejected()
     test_v1_1_style_analysis_still_validates_without_ipcat_findings()
     test_schematic_nets_missing_gpio_rejected()
+    test_stored_1_2_0_target_artifacts_still_validate()
     test_skill_schema_json_still_valid_json_and_backward_compatible()
     print("ALL TESTS PASSED")
 

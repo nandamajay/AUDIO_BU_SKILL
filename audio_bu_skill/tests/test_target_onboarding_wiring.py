@@ -28,6 +28,7 @@ import tempfile
 from pathlib import Path
 
 from orchestrator.runners.target_onboarding_runner import (
+    _build_audio_topology,
     _history_derived_candidates,
     _map_analysis_to_envelope,
     _schematic_nets_dict,
@@ -357,6 +358,32 @@ def test_schematic_nets_dict_flattens_analysis_schema_shape() -> None:
           "skipping entries missing 'gpio'")
 
 
+def _build_audio_topology_kwargs() -> dict:
+    return {"pm": {"source": "rpmhpd"}, "power_model_hint": {"status": "source_confirmed"},
+            "pin_crosschecks": []}
+
+
+def test_build_audio_topology_threads_element_counts_when_present() -> None:
+    ec = [{"element_class": "dmic_line", "dt": 0, "evidence": 8, "proposal": 8,
+           "catalog": None, "ambiguous": False, "dt_applied": False, "citations": ["p4"]}]
+    topo = _build_audio_topology(analysis={"codecs": [], "element_counts": ec},
+                                 **_build_audio_topology_kwargs())
+    assert topo["element_counts"] == ec, topo
+    print("PASS: _build_audio_topology threads element_counts into audio_topology when present")
+
+
+def test_build_audio_topology_omits_element_counts_when_absent() -> None:
+    # Backward-compat: a pre-1.3.0 analysis (no element_counts) yields a topology
+    # with no element_counts key at all -- byte-identical to pre-Fix-A behavior.
+    topo = _build_audio_topology(analysis={"codecs": []}, **_build_audio_topology_kwargs())
+    assert "element_counts" not in topo, topo
+    # an explicit empty list is also treated as "nothing to thread" (falsy)
+    topo2 = _build_audio_topology(analysis={"codecs": [], "element_counts": []},
+                                  **_build_audio_topology_kwargs())
+    assert "element_counts" not in topo2, topo2
+    print("PASS: _build_audio_topology omits element_counts key when analysis has none (backward compatible)")
+
+
 def _validate_output(output: dict) -> None:
     import importlib.util
     vpath = SKILLS_ROOT / "target_onboarding" / "validator.py"
@@ -383,6 +410,8 @@ def main() -> None:
     test_run_target_onboarding_populates_audio_topology_and_patch_series()
     test_pin_crosscheck_mismatch_folds_into_needs_review()
     test_schematic_nets_dict_flattens_analysis_schema_shape()
+    test_build_audio_topology_threads_element_counts_when_present()
+    test_build_audio_topology_omits_element_counts_when_absent()
     print("ALL TESTS PASSED")
 
 

@@ -294,6 +294,31 @@ def test_evidence_column_readable() -> None:
     print("PASS: §3.2 evidence column readable for path, mixed, and prose citations")
 
 
+def test_element_counts_does_not_perturb_ledger() -> None:
+    """Fix A / §3 non-interference: element_counts (schema 1.3.0, WP-C input,
+    NOT a ledger domain) must leave every ledger row byte-identical. The ledger
+    reads none of it — it is excluded from the field→domain table on purpose."""
+    base_gc = {
+        "audio_topology": {
+            "codecs": [{"part": "A", "confidence": 0.8, "citations": ["ds.pdf", "patch.diff"]}],
+            "soundwire": {"present": True, "confidence": 0.55, "citations": ["a", "b"]},
+        }
+    }
+    with_ec = {
+        "audio_topology": {
+            **base_gc["audio_topology"],
+            "element_counts": [
+                {"element_class": "dmic_line", "dt": 0, "evidence": 8, "proposal": 8,
+                 "catalog": None, "ambiguous": False, "dt_applied": False, "citations": ["p4"]},
+                {"element_class": "soundwire_master", "dt": 0, "evidence": None, "proposal": 1,
+                 "catalog": None, "ambiguous": True, "dt_applied": False, "citations": ["mc=1"]},
+            ],
+        }
+    }
+    assert L.build_ledger(base_gc, None) == L.build_ledger(with_ec, None)
+    print("PASS: element_counts leaves ledger rows byte-identical (WP-B untouched)")
+
+
 def main() -> None:
     test_all_nine_domains_always_present()
     test_field_domain_table_covers_schema()
@@ -313,6 +338,7 @@ def main() -> None:
     test_eliza_dsp_inferred_from_q6_stack()
     test_not_applicable_band_is_dash()
     test_evidence_column_readable()
+    test_element_counts_does_not_perturb_ledger()
     print("ALL TESTS PASSED")
 
 

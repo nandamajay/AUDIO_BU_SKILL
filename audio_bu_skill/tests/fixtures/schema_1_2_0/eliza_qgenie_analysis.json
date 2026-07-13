@@ -1,0 +1,195 @@
+{
+  "_fixture_note": "SANITIZED backward-compat fixture. A structurally faithful 1.2.0-shaped analysis (no element_counts) used to prove such a document still validates under ANALYSIS_SCHEMA 1.3.0. All confidential part numbers, drawing numbers, firmware paths, absolute source paths, IPCAT document IDs and internal SoC/donor codenames have been replaced with generic placeholders. Shape and field types are preserved, including the fully-populated SoundWire path (amplifiers/mics/speakers non-empty, soundwire.present=true, master_count=1), the cross-lane ambiguity example (master_count could be 1 or 2), the schematic_nets array and a target-specific ipcat_findings result. This models a SoundWire-attached codec + smart-amp + DMIC/AMIC target.",
+  "soc": {
+    "value": "SOC-B (SoundWire reference target)",
+    "confidence": 0.9,
+    "citations": [
+      "kernel-b/arch/arm64/boot/dts/soc-b.dtsi (compatible strings: vendor,soc-b-gcc, vendor,soc-b-tcsr, vendor,soc-b-rpmhpd, vendor,soc-b-smmu-500, vendor,soc-b-tlmm, vendor,scm-soc-b)",
+      "targets/target-c/evidence/offline/soc-card-schematic.pdf p1,p4 (title block: 'SCHEMATIC, CCA, EVK SOC CARD'; block diagram center IC labeled 'SOC-B')",
+      "ipcat doc <ipcat-doc-1> (LPASS HPG, 'Figure illustrates high-level connectivity of the audio interfaces')"
+    ]
+  },
+  "board": {
+    "value": "Target-C EVK: SOC CARD + carrier board + Audio Daughtercard (CODEC-B, 2x AMP-B) + MIC Daughtercard (8x DMIC, 2x AMIC)",
+    "confidence": 0.85,
+    "citations": [
+      "targets/target-c/evidence/offline/board-block-diagram.pdf p3 (BLOCK DIAGRAM: SOC CARD / CARRIER BOARD / AUDIO DC / MIC DC regions)",
+      "targets/target-c/evidence/offline/soc-card-schematic.pdf p1 (title 'EVK SOC CARD')"
+    ]
+  },
+  "codecs": [
+    {
+      "part": "CODEC-B",
+      "role": "primary audio codec — SoundWire slave (SWR_RX/SWR_TX to LPASS via level-shifted B2B connector); provides AMIC1-3, HPH L/R, AUX_OUT, HS_DET/HPH_REF, MIC_BIAS",
+      "confidence": 0.9,
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p3 (BLOCK DIAGRAM, U labeled 'CODEC-B' in AUDIO DC block with SWR_RX/SWR_TX, AMIC1-3, HPH, AUX_OUT pins)",
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p5 (B2B CONNECTOR sheet: CODEC-B HSDET/HPH/AUX/RST/AMIC/SWR_TX/RX nets)",
+        "ipcat doc <ipcat-doc-1>: 'this SoC can be paired with the CODEC-B codec family via SoundWire interface'",
+        "kernel driver family present but exact CODEC-B compat string not found: kernel-b/sound/soc/codecs/codec-b.c (of_match table lists sibling variants only — no vendor,codec-b entry)",
+        "kernel-b/sound/soc/codecs/codec-b-sdw.c (MODULE_DEVICE_TABLE(sdw, codec_b_slave_id))"
+      ]
+    }
+  ],
+  "amplifiers": [
+    {
+      "part": "AMP-B",
+      "role": "2x stereo smart speaker Class-D amplifiers (Speaker 0 / Speaker 1), each a SoundWire slave with its own SWR0 CLK/DATA pair, ENABLE from LPASS GPIO",
+      "confidence": 0.9,
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p3 (BLOCK DIAGRAM: two amp instances explicitly labeled 'AMP-B' driving Speaker 0 / Speaker 1 via SPK0/1_OUTP/N, with SWR0, ENABLE, supply rails)",
+        "upstream driver confirms exact part support: kernel-b/sound/soc/codecs/amp-b.c (OTP id table lists AMP-B and siblings) and MODULE_DEVICE_TABLE(sdw, amp_b_swr_id)",
+        "ipcat doc <ipcat-doc-1>: 'external speaker amplifiers are connected via a dedicated SoundWire interface'"
+      ]
+    }
+  ],
+  "mics": [
+    {
+      "part": "8x DMIC (digital PDM mics)",
+      "role": "8 digital mics on MIC DC, muxed via analog muxes to DMIC01/23/45/67 CLK+DATA pairs into CODEC-B/LPASS",
+      "confidence": 0.85,
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p3 (BLOCK DIAGRAM: 'DMIC X 8' block in MIC DC, DMIC_BIAS from an LDO)",
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p4 (B2B CONNECTOR: DMIC01/23/45/67_CLK,DATA nets, DMIC supply rails, DMIC_ELDO_EN)",
+        "ipcat doc <ipcat-doc-1>: 'this SoC can support up to 8 DMICs directly connected to the SoC'"
+      ]
+    },
+    {
+      "part": "2x AMIC (analog electret mics)",
+      "role": "2 analog mics on MIC DC feeding CODEC-B AMIC1/AMIC2 analog inputs directly (codec exposes AMIC1-3 but only 2 populated per schematic)",
+      "confidence": 0.7,
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p3 (BLOCK DIAGRAM: 'AMIC X 2' block in MIC DC, AMIC_BIAS 1,2,3 routed to CODEC-B MIC_BIAS/AMIC1/AMIC2 pins)"
+      ]
+    }
+  ],
+  "speakers": [
+    {
+      "part": "Speaker 0 (via AMP-B #1)",
+      "role": "left/primary channel, SPK0_OUTP/N to Speaker Header CONN0",
+      "confidence": 0.85,
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p3"
+      ]
+    },
+    {
+      "part": "Speaker 1 (via AMP-B #2)",
+      "role": "right/secondary channel, SPK1_OUTP/N to Speaker Header CONN1 (stereo pair)",
+      "confidence": 0.85,
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p3"
+      ]
+    }
+  ],
+  "buses": [
+    "I2S/PCM/TDM — 5 instances total (4 in LPI: LPI_I2S0/1/2/3, 1 in Core), muxed via analog muxes, level-shifted 1.2V<->1.8V across the SOC-card-to-audio-DC B2B connector (JC1/JC2)",
+    "SoundWire — SWR_RX/SWR_TX (2-wire) to CODEC-B codec, plus separate SWR0 per AMP-B amp; controller/master side lives on the SoC card, not yet present as a DT node in the applied soc-b.dtsi",
+    "DMIC PDM bus — DMIC01/23/45/67 CLK+DATA pairs (4 stereo pairs = 8 DMICs) into LPASS/codec",
+    "SLIMbus — referenced by IPCAT for BT audio, not evidenced in schematics reviewed"
+  ],
+  "soundwire": {
+    "present": true,
+    "confidence": 0.55,
+    "master_count": 1,
+    "citations": [
+      "targets/target-c/evidence/offline/board-block-diagram.pdf p3 (BLOCK DIAGRAM shows single SWR_RX/SWR_TX pair to CODEC-B plus SWR0 to each AMP-B, all originating from the SOC CARD side, level-shifted through a single shifter block)",
+      "ipcat doc <ipcat-doc-1> ('codec via SoundWire interface' and 'amplifiers connected via dedicated SoundWire interface' — phrasing 'dedicated' suggests the amp path may be a separate master instance from the codec RX/TX path, which would make master_count=2; not resolved by available evidence)",
+      "No SoundWire controller compatible string (e.g. vendor,soundwire-vX.Y.Z) present yet in kernel-b/arch/arm64/boot/dts/soc-b.dtsi — master_count cannot be confirmed from kernel DT"
+    ]
+  },
+  "power_model": {
+    "kind": "rpmhpd",
+    "confidence": 0.9,
+    "citations": [
+      "kernel-b/arch/arm64/boot/dts/soc-b.dtsi (rpmhpd: power-controller node, compatible = 'vendor,soc-b-rpmhpd'; remoteproc_adsp power-domains = <&rpmhpd RPMHPD_LCX>, <&rpmhpd RPMHPD_LMX>, power-domain-names = 'lcx','lmx')",
+      "kernel-b/drivers/pmdomain/qcom/rpmhpd.c (power_model_hint driver-source citations)"
+    ],
+    "needs_review": true
+  },
+  "audio_stack": {
+    "gpr": true,
+    "apm": true,
+    "audioreach": true,
+    "q6apm": true,
+    "q6prm": true,
+    "lpass": true,
+    "citations": [
+      "kernel-b/drivers/soc/qcom/apr.c (vendor,gpr compatible present — GPR/packet-router driver exists upstream)",
+      "kernel-b/sound/soc/qcom/qdsp6/q6apm.c, q6apm-dai.c, q6apm-lpass-dais.c (Q6APM driver present)",
+      "kernel-b/sound/soc/qcom/qdsp6/q6prm.c, q6prm-clocks.c (Q6PRM driver present)",
+      "kernel-b/sound/soc/qcom/qdsp6/audioreach.c, topology.c (AudioReach core present)",
+      "kernel-b/arch/arm64/boot/dts/soc-b.dtsi (remoteproc_adsp node with LCX/LMX power-domains, LPASS NoC interconnects present but status='disabled' at SoC level)",
+      "kernel-b/arch/arm64/boot/dts/soc-b-mtp.dts (&remoteproc_adsp firmware-name = '<adsp-fw>','<adsp-dtb-fw>'; status='okay')"
+    ]
+  },
+  "nearest_targets": [
+    {
+      "name": "target-a",
+      "score": 0.25,
+      "rationale": "Shares the generic ADSP/AudioReach plumbing pattern (rpmhpd LCX/LMX power domains feeding remoteproc_adsp, same GPR/Q6APM/Q6PRM driver stack), but the audio codec topology is fundamentally different: target-a uses two discrete I2S-attached ICs (a DAC and an ADC, no SoundWire) while this target uses a SoundWire-attached codec plus 2x SoundWire smart amps with DMIC/AMIC front-end. No SoundWire-based comparable target exists among the supplied candidates.",
+      "citations": [
+        "persistent memory: target-a-audio-facts.md (discrete I2S DAC/ADC pair, SCMI power domains not rpmhpd)",
+        "target-c evidence as cited above"
+      ]
+    }
+  ],
+  "missing_evidence": [
+    "No SoundWire controller DT node (vendor,soundwire-vX.Y.Z) exists yet in the applied soc-b.dtsi/soc-b-mtp.dts — SoundWire master_count and controller register base are unconfirmed from kernel-side evidence.",
+    "No LPASS macro nodes (WSA/VA/RX/TX macro), no GPR/Q6APM/Q6PRM DT nodes, and no sound-card (machine driver) node exist anywhere in the applied kernel tree for this target — all audio DT wiring is still pending as unapplied patches, not yet present in the kernel tree at the designated commit.",
+    "The board-level audio DTS file referenced by candidate patches does not exist in this kernel tree; only soc-b.dtsi (SoC) and soc-b-mtp.dts (display/USB/UFS-only MTP board) were found via Glob.",
+    "Exact CODEC-B compatible string is absent from the upstream codec-b.c of_match table (only sibling variants present) — unclear whether CODEC-B is a drop-in variant of the existing driver or needs a new match entry.",
+    "GPIO/pinmux assignments for I2S0-3 (BCLK/WS/DATA), SWR_RX/TX, and DMIC clk/data lines are visible as net names on the schematic (B2B connector, mux, level-shifter sheets) but have not been cross-referenced against the SoC pinctrl driver to obtain actual GPIO numbers.",
+    "SoundWire master_count is ambiguous: schematic shows one SWR_RX/TX pair to the codec and a separate 'dedicated' SWR0 to the amps, which IPCAT text also implies are 'dedicated' — could be 1 or 2 physical master instances; not resolved.",
+    "AUDIO CODEC and AUDIO SPEAKER 0/1 detail sheets and the amplifier datasheet PDF were not opened in this session — exact SoundWire slave addresses, port mapping, and amp gain/config straps remain unverified.",
+    "No mic bias / AMIC electrical net detail beyond the block diagram was reviewed; AMIC1-3 vs only-2-populated-AMIC discrepancy not resolved against a detail sheet.",
+    "candidate_targets list contains no real SoundWire-based comparable target — the kernel_history_donor_hint entries are Linux subsystem topic labels tied to commit SHAs, not actual bring-up targets, so 'nearest target' ranking is weak by necessity.",
+    "IPCAT SoundWire Master HPG hits returned only generic multi-project boilerplate with no target-specific master instance count or register map."
+  ],
+  "overall_confidence": 0.62,
+  "human_review_needed": true,
+  "ipcat_findings": {
+    "queried": true,
+    "returned_target_specific": true,
+    "returned_generic_only": false,
+    "notes": "Queried the IPCAT content search for target-specific audio interface / SoundWire info. Got several hits: some from an 'LPASS HPG' document that explicitly names this target and describes its audio interface topology by name (codec family via SoundWire, amp family via dedicated SoundWire, up to 8 DMICs, 5 I2S/PCM/TDM interfaces, BT via SLIMbus) — this is genuinely target-specific and corroborates/extends the schematic findings (part-family confirmation for both the codec and the amp). The remaining hits were from generic 'Soundwire_master Hardware Programming Guide' documents describing generic multi-project SWR master architecture with no target-specific master count or register map — these were generic/boilerplate.",
+    "citations": [
+      "<ipcat-doc-1> (LPASS HPG, target-specific)",
+      "<ipcat-doc-2> (LPASS HPG, target-specific)",
+      "<ipcat-doc-3> (Soundwire_master HPG, generic)"
+    ]
+  },
+  "schematic_nets": [
+    {
+      "net_name": "LPI_I2S0_CLK/WS/D0-D3",
+      "gpio": "unresolved (SoC-side GPIO not cross-referenced)",
+      "sheet_ref": "board-block-diagram sheet 5 GPIO_I2S_LVS",
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p6"
+      ]
+    },
+    {
+      "net_name": "CODEC-B_SWR_TX_CLK/DATA0/1, CODEC-B_SWR_RX_CLK/DATA0/1",
+      "gpio": "unresolved",
+      "sheet_ref": "board-block-diagram sheet 4 B2B_CONNECTOR (JC1 pins ~60-66)",
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p5"
+      ]
+    },
+    {
+      "net_name": "DMIC01_CLK/DATA, DMIC23_CLK/DATA, DMIC45_CLK/DATA, DMIC67_CLK/DATA",
+      "gpio": "unresolved",
+      "sheet_ref": "board-block-diagram sheet 4 B2B_CONNECTOR (JC2 pins 49-69)",
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p5"
+      ]
+    },
+    {
+      "net_name": "SWR0 (AMP-B #1 and #2), EN0/EN1 (amp enables)",
+      "gpio": "unresolved",
+      "sheet_ref": "board-block-diagram sheet 3 BLOCK_DIAGRAM",
+      "citations": [
+        "targets/target-c/evidence/offline/board-block-diagram.pdf p3"
+      ]
+    }
+  ]
+}
