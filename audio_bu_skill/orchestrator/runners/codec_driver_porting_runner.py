@@ -23,12 +23,12 @@ def run_codec_driver_porting(input_envelope: dict[str, Any]) -> dict[str, Any]:
     evidence_refs: list[str] = []
     for part_number in codec_part_numbers:
         verdict = verdicts.get(part_number)
-        if not verdict or "driver_path" not in verdict or "status" not in verdict:
+        if not verdict or "driver_path" not in verdict or "status" not in verdict or verdict["driver_path"] is None:
             availability[part_number] = {"status": "unresolved", "driver_path": None}
             continue
         driver_path = kernel_source_path / verdict["driver_path"]
         availability[part_number] = {
-            "status": verdict["status"],  # "upstream_present" | "needs_port" | "needs_write"
+            "status": verdict["status"],  # "upstream_present" | "needs_port" | "needs_write" | "unresolved"
             "driver_path": str(driver_path),
             "exists_on_disk": driver_path.is_file(),
         }

@@ -27,7 +27,15 @@ from typing import Any
 # `schematic_nets` (for pin_crosscheck's GPIO-vs-net comparison) and optional
 # `q6apm`/`q6prm` booleans on `audio_stack`. Nothing required changed; a
 # 1.0.0-shaped response still validates.
-ANALYSIS_SCHEMA_VERSION = "1.1.0"
+#
+# 1.2.0 (Benchmark Readiness Fix #4): additive only — adds optional
+# `ipcat_findings` so QGenie can self-report whether it actually queried IPCAT
+# live via the qgenie-chat MCP tools this session, and whether the result was
+# target-specific or only generic. This is diagnostic/reporting only — the
+# orchestrator cannot observe live MCP tool calls itself (see
+# target_onboarding_runner._ipcat_evidence_summary), so this is the only place
+# that signal can be captured. Nothing required changed.
+ANALYSIS_SCHEMA_VERSION = "1.2.0"
 
 # A finding that carries per-field confidence + citations. Reused for every
 # perception signal QGenie returns so the "cite everything" rule is uniform.
@@ -66,6 +74,22 @@ _SCHEMATIC_NET_ITEM: dict[str, Any] = {
         "citations": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["net_name", "gpio"],
+    "additionalProperties": True,
+}
+
+# New in 1.2.0: QGenie's own self-report of whether it queried IPCAT live via
+# the qgenie-chat MCP tools this session, and whether what came back was
+# actually target-specific or only generic (e.g. multi-SoC boilerplate).
+# Optional on the envelope — absent means "not reported", not "not queried".
+_IPCAT_FINDINGS_ITEM: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "queried": {"type": "boolean"},
+        "returned_target_specific": {"type": "boolean"},
+        "returned_generic_only": {"type": "boolean"},
+        "notes": {"type": "string"},
+        "citations": {"type": "array", "items": {"type": "string"}},
+    },
     "additionalProperties": True,
 }
 
@@ -135,6 +159,8 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
         "human_review_needed": {"type": "boolean"},
         # New in 1.1.0, optional: schematic net/GPIO findings for pin_crosscheck.
         "schematic_nets": {"type": "array", "items": _SCHEMATIC_NET_ITEM},
+        # New in 1.2.0, optional: IPCAT MCP query self-report (Fix #4).
+        "ipcat_findings": _IPCAT_FINDINGS_ITEM,
     },
     "required": [
         "soc",

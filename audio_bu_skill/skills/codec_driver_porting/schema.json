@@ -21,9 +21,12 @@
           "type": "object",
           "required": ["driver_path", "status"],
           "properties": {
-            "driver_path": {"type": "string", "minLength": 1},
-            "status": {"type": "string", "enum": ["upstream_present", "needs_port", "needs_write"]}
-          }
+            "driver_path": {"type": ["string", "null"]},
+            "status": {"type": "string", "enum": ["upstream_present", "needs_port", "needs_write", "unresolved"]}
+          },
+          "if": {"properties": {"status": {"const": "unresolved"}}},
+          "then": {},
+          "else": {"properties": {"driver_path": {"type": "string", "minLength": 1}}}
         }
       }
     }

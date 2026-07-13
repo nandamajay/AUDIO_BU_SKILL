@@ -15,7 +15,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from orchestrator.runners.power_model_inspection import inspect_power_model_source
+from orchestrator.runners.power_model_inspection import find_target_rpmhpd_compatible, inspect_power_model_source
 
 _RPMHPD_FIXTURE = """
 static struct rpmhpd *nord_rpmhpds[] = {
@@ -165,6 +165,38 @@ def test_never_writes_to_kernel_tree() -> None:
     print("PASS: inspect_power_model_source never mutates the kernel tree")
 
 
+def test_find_target_rpmhpd_compatible_from_own_dtsi() -> None:
+    """Real-world shape: the target's rpmhpd node (and its own compatible
+    string) is wired directly in the checked-out .dtsi -- e.g. eliza.dtsi has
+    `rpmhpd: power-controller { compatible = "qcom,eliza-rpmhpd"; ... }` --
+    introduced by an ordinary base-platform commit kernel_history never sees.
+    This must be found without any kernel_history involvement at all."""
+    with tempfile.TemporaryDirectory() as tmp:
+        kernel = _make_kernel(Path(tmp))
+        _add_dtsi(kernel, "eliza", _ELIZA_DTSI_FIXTURE + '\n\nrpmhpd: power-controller {\n\tcompatible = "qcom,eliza-rpmhpd";\n};\n')
+
+        compat = find_target_rpmhpd_compatible(kernel, "eliza")
+        assert compat == "qcom,eliza-rpmhpd", compat
+    print("PASS: find_target_rpmhpd_compatible locates the target's own rpmhpd compatible string in its dtsi")
+
+
+def test_find_target_rpmhpd_compatible_none_when_absent() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        kernel = _make_kernel(Path(tmp))
+        _add_dtsi(kernel, "ghostboard", "// no rpmhpd node here\n")
+
+        compat = find_target_rpmhpd_compatible(kernel, "ghostboard")
+        assert compat is None, compat
+    print("PASS: find_target_rpmhpd_compatible returns None (never fabricates) when no rpmhpd node exists")
+
+
+def test_find_target_rpmhpd_compatible_empty_search_name() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        kernel = _make_kernel(Path(tmp))
+        assert find_target_rpmhpd_compatible(kernel, "") is None
+    print("PASS: find_target_rpmhpd_compatible returns None on empty dtsi_search_name, no crash")
+
+
 def main() -> None:
     test_source_confirmed_lcx_lmx_present_eliza()
     test_source_confirmed_lcx_lmx_absent_nord()
@@ -173,6 +205,9 @@ def main() -> None:
     test_inferred_when_array_unresolvable()
     test_dtsi_confirms_none_when_no_dtsi_given()
     test_never_writes_to_kernel_tree()
+    test_find_target_rpmhpd_compatible_from_own_dtsi()
+    test_find_target_rpmhpd_compatible_none_when_absent()
+    test_find_target_rpmhpd_compatible_empty_search_name()
     print("ALL TESTS PASSED")
 
 

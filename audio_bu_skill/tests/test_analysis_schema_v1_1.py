@@ -36,10 +36,18 @@ _V1_1_STYLE_ANALYSIS = {
     "schematic_nets": [{"net_name": "WSA1_EN", "gpio": 59, "sheet_ref": "CQ7790_GPIO1", "citations": []}],
 }
 
+_V1_2_STYLE_ANALYSIS = {
+    **_V1_1_STYLE_ANALYSIS,
+    "ipcat_findings": {
+        "queried": True, "returned_target_specific": False, "returned_generic_only": True,
+        "notes": "only generic multi-SoC HPG chapters returned", "citations": [],
+    },
+}
+
 
 def test_schema_version_bumped() -> None:
-    assert ANALYSIS_SCHEMA_VERSION == "1.1.0", ANALYSIS_SCHEMA_VERSION
-    print("PASS: ANALYSIS_SCHEMA_VERSION bumped to 1.1.0")
+    assert ANALYSIS_SCHEMA_VERSION == "1.2.0", ANALYSIS_SCHEMA_VERSION
+    print("PASS: ANALYSIS_SCHEMA_VERSION bumped to 1.2.0")
 
 
 def test_v1_0_style_analysis_still_validates() -> None:
@@ -50,6 +58,17 @@ def test_v1_0_style_analysis_still_validates() -> None:
 def test_v1_1_style_analysis_validates() -> None:
     jsonschema.validate(instance=_V1_1_STYLE_ANALYSIS, schema=ANALYSIS_SCHEMA)  # must not raise
     print("PASS: a 1.1.0-shaped analysis (with schematic_nets/q6apm/q6prm) validates")
+
+
+def test_v1_2_style_analysis_validates() -> None:
+    jsonschema.validate(instance=_V1_2_STYLE_ANALYSIS, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: a 1.2.0-shaped analysis (with ipcat_findings) validates")
+
+
+def test_v1_1_style_analysis_still_validates_without_ipcat_findings() -> None:
+    assert "ipcat_findings" not in _V1_1_STYLE_ANALYSIS
+    jsonschema.validate(instance=_V1_1_STYLE_ANALYSIS, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: a 1.1.0-shaped analysis (no ipcat_findings at all) still validates against 1.2.0 schema")
 
 
 def test_schematic_nets_missing_gpio_rejected() -> None:
@@ -90,6 +109,8 @@ def main() -> None:
     test_schema_version_bumped()
     test_v1_0_style_analysis_still_validates()
     test_v1_1_style_analysis_validates()
+    test_v1_2_style_analysis_validates()
+    test_v1_1_style_analysis_still_validates_without_ipcat_findings()
     test_schematic_nets_missing_gpio_rejected()
     test_skill_schema_json_still_valid_json_and_backward_compatible()
     print("ALL TESTS PASSED")

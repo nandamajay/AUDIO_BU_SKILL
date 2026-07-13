@@ -160,6 +160,84 @@ def test_task_spec_includes_kernel_history_and_power_model_hint() -> None:
           "into task_spec and expands candidate_targets with donor-hint stubs")
 
 
+def _init_git_kernel_rpmhpd_only_in_base_dtsi(root: Path) -> Path:
+    """Real-world shape for Fix #3: the target's own rpmhpd node/compatible
+    string (e.g. eliza.dtsi's `rpmhpd: power-controller { compatible =
+    "qcom,eliza-rpmhpd"; }`) is wired by an ORDINARY base-platform commit --
+    not a FROMLIST/RFC/audio-tagged one -- so kernel_history's git-log
+    archaeology never surfaces it as a compatible_fallback at all. Before
+    Fix #3, this meant power_model_hint always fell through to "missing"
+    even though the answer was sitting in the checked-out tree. There is no
+    FROMLIST commit in this fixture at all -- proving the DTS-direct-scan
+    path works standalone, without kernel_history's help."""
+    kernel = root / "linux-fake"
+    kernel.mkdir(parents=True, exist_ok=True)
+
+    _git(kernel, "init", "-q")
+    _git(kernel, "config", "user.email", "test@example.com")
+    _git(kernel, "config", "user.name", "Test User")
+
+    dts_dir = kernel / "arch" / "arm64" / "boot" / "dts" / "qcom"
+    dts_dir.mkdir(parents=True, exist_ok=True)
+    (dts_dir / "realtarget.dtsi").write_text(
+        'rpmhpd: power-controller {\n'
+        '    compatible = "qcom,realtarget-rpmhpd";\n'
+        '};\n'
+        'remoteproc_adsp: remoteproc@1 {\n'
+        '    compatible = "qcom,realtarget-adsp-pas";\n'
+        '    power-domains = <&rpmhpd RPMHPD_LCX>, <&rpmhpd RPMHPD_LMX>;\n'
+        '    power-domain-names = "lcx", "lmx";\n'
+        '};\n',
+        encoding="utf-8",
+    )
+
+    rpmhpd_dir = kernel / "drivers" / "pmdomain" / "qcom"
+    rpmhpd_dir.mkdir(parents=True, exist_ok=True)
+    (rpmhpd_dir / "rpmhpd.c").write_text(
+        "static struct rpmhpd *realtarget_rpmhpds[] = {\n"
+        "\t[RPMHPD_LCX] = &lcx,\n"
+        "\t[RPMHPD_LMX] = &lmx,\n"
+        "};\n\n"
+        "static const struct rpmhpd_desc realtarget_desc = {\n"
+        "\t.rpmhpds = realtarget_rpmhpds,\n"
+        "\t.num_pds = ARRAY_SIZE(realtarget_rpmhpds),\n"
+        "};\n\n"
+        "static const struct of_device_id rpmhpd_match_table[] = {\n"
+        '\t{ .compatible = "qcom,realtarget-rpmhpd", .data = &realtarget_desc },\n'
+        "\t{ }\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    _git(kernel, "add", "-A")
+    _git(kernel, "commit", "-q", "-m", "arm64: dts: qcom: realtarget: base platform bring-up")
+    return kernel
+
+
+def test_power_model_hint_source_confirmed_via_dtsi_without_kernel_history() -> None:
+    """Fix #3 regression: power_model_hint must reach source_confirmed purely
+    from the target's own checked-out .dtsi, even when kernel_history surfaces
+    zero candidates (no FROMLIST/RFC commit exists in this fixture at all)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_git_kernel_rpmhpd_only_in_base_dtsi(root)
+
+        resolved = resolve_onboarding_task_spec(root, "realtarget", "linux-fake")
+        task_spec = resolved["task_spec"]
+
+        assert task_spec["kernel_history"]["candidates"] == [], (
+            "fixture intentionally has no FROMLIST/RFC commit -- kernel_history "
+            "must find nothing, proving power_model_hint doesn't depend on it"
+        )
+
+        power_model_hint = task_spec["power_model_hint"]
+        assert power_model_hint["status"] == "source_confirmed", power_model_hint
+        assert power_model_hint["lcx_present"] is True, power_model_hint
+        assert power_model_hint["lmx_present"] is True, power_model_hint
+        assert power_model_hint["dtsi_confirms_lcx_lmx"] is True, power_model_hint
+    print("PASS: power_model_hint reaches source_confirmed via direct dtsi scan "
+          "even when kernel_history surfaces zero candidates (Fix #3)")
+
+
 def test_history_derived_candidates_dedup_against_existing() -> None:
     kernel_history = {
         "candidates": [
@@ -300,6 +378,7 @@ def _run_with_tmp_targets(envelope: dict, tmp_targets_root: Path) -> dict:
 
 def main() -> None:
     test_task_spec_includes_kernel_history_and_power_model_hint()
+    test_power_model_hint_source_confirmed_via_dtsi_without_kernel_history()
     test_history_derived_candidates_dedup_against_existing()
     test_run_target_onboarding_populates_audio_topology_and_patch_series()
     test_pin_crosscheck_mismatch_folds_into_needs_review()

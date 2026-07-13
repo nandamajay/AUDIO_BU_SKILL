@@ -27,7 +27,7 @@ from orchestrator.reasoning.result import reasoning_fingerprints
 from orchestrator.run_manifest import _sha256_file
 from orchestrator.runners.kernel_history_discovery import discover_kernel_history
 from orchestrator.runners.pin_crosscheck import cross_check_pins
-from orchestrator.runners.power_model_inspection import inspect_power_model_source
+from orchestrator.runners.power_model_inspection import find_target_rpmhpd_compatible, inspect_power_model_source
 from orchestrator.runners.source_intake_runner import discover_evidence
 
 # Evidence-source default carried into every generated case (v1.0 default).
@@ -73,7 +73,7 @@ def resolve_onboarding_task_spec(
     kernel_commit = _kernel_commit(kernel_source)
 
     kernel_history = discover_kernel_history(kernel_source, target_name)
-    power_model_hint = _power_model_hint(kernel_source, kernel_history)
+    power_model_hint = _power_model_hint(kernel_source, kernel_history, target_name)
 
     local_candidates = _candidate_targets(workspace_root, kernel_source, exclude=target_name)
     candidate_targets = local_candidates + _history_derived_candidates(
@@ -140,6 +140,7 @@ def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
     # --- 4. map ANALYSIS_SCHEMA -> the existing output-envelope shape ---
     cited = _collect_citations(analysis)
     evidence_refs = _dedup(evidence_files + cited)
+    ipcat_mcp_requested = bool(task_spec.get("evidence", {}).get("ipcat_mcp"))
 
     output = _map_analysis_to_envelope(
         analysis=analysis, target_name=target_name, run_id=run_id,
@@ -147,7 +148,7 @@ def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
         evidence_roots=evidence_roots, evidence_files=evidence_files,
         evidence_refs=evidence_refs,
         kernel_history=resolved["kernel_history"], power_model_hint=resolved["power_model_hint"],
-        pin_crosschecks=pin_crosschecks,
+        pin_crosschecks=pin_crosschecks, ipcat_mcp_requested=ipcat_mcp_requested,
     )
 
     # --- 5. attach reasoning provenance for do_onboard to artifact (never logged) ---
@@ -293,17 +294,26 @@ def _history_derived_candidates(
     return out
 
 
-def _power_model_hint(kernel_source: Path, kernel_history: dict[str, Any]) -> dict[str, Any]:
-    """Best-effort rpmhpd.c LCX/LMX inspection (slice 2), keyed off any
-    ``qcom,<x>-rpmhpd`` compatible string surfaced by kernel_history's diffs.
-    Returns ``{"status": "missing", ...}`` (never raises) when no such
-    compatible string was found -- there is nothing to inspect yet.
+def _power_model_hint(
+    kernel_source: Path, kernel_history: dict[str, Any], target_name: str = "",
+) -> dict[str, Any]:
+    """Best-effort rpmhpd.c LCX/LMX inspection (slice 2), keyed off the
+    target's own ``qcom,<target>-rpmhpd`` compatible string.
+
+    Tries the target's own checked-out .dtsi first (``find_target_rpmhpd_compatible``
+    -- most rpmhpd nodes are wired by an ordinary base-platform commit, not an
+    audio/FROMLIST-tagged one, so they are on-disk today but invisible to
+    kernel_history's git-log archaeology). Falls back to any
+    ``qcom,<x>-rpmhpd`` compatible_fallback kernel_history's diffs happened to
+    surface, for cases where the rpmhpd node itself is still only proposed in
+    an unapplied FROMLIST/RFC patch. Returns ``{"status": "missing", ...}``
+    (never raises) when neither source finds anything to inspect.
     """
-    compat = _guess_rpmhpd_compatible(kernel_history)
+    compat = find_target_rpmhpd_compatible(kernel_source, target_name) or _guess_rpmhpd_compatible(kernel_history)
     if not compat:
         return {"status": "missing", "kind": None, "lcx_present": None, "lmx_present": None,
                  "lcx_lmx_present": None, "dtsi_confirms_lcx_lmx": None, "citations": []}
-    return inspect_power_model_source(kernel_source, compat)
+    return inspect_power_model_source(kernel_source, compat, dtsi_search_name=target_name)
 
 
 def _guess_rpmhpd_compatible(kernel_history: dict[str, Any]) -> str | None:
@@ -331,10 +341,14 @@ def _map_analysis_to_envelope(
     *, analysis, target_name, run_id, kernel_source, kernel_source_path,
     evidence_roots, evidence_files, evidence_refs,
     kernel_history=None, power_model_hint=None, pin_crosschecks=None,
+    ipcat_mcp_requested=False,
 ) -> dict[str, Any]:
     kernel_history = kernel_history or {}
     power_model_hint = power_model_hint or {}
     pin_crosschecks = pin_crosschecks or []
+    ipcat_findings = _ipcat_evidence_summary(
+        analysis=analysis, evidence_files=evidence_files, ipcat_mcp_requested=ipcat_mcp_requested,
+    )
     overall_conf = float(analysis.get("overall_confidence") or 0.0)
     qgenie_review = bool(analysis.get("human_review_needed"))
     low_confidence = qgenie_review or overall_conf < _MIN_OVERALL_CONFIDENCE
@@ -405,6 +419,11 @@ def _map_analysis_to_envelope(
                 f"{verdict.get('note', 'no matching DT GPIO assignment found')}"
             )
 
+    if ipcat_findings["status"] in ("generic_only", "unavailable", "queried_no_result"):
+        needs_review.append(
+            f"ipcat_coverage: {ipcat_findings['status']} — {ipcat_findings['summary']}"
+        )
+
     generated_case = {
         "target_soc": target_soc,
         "nearest_target": nearest_target,
@@ -419,6 +438,7 @@ def _map_analysis_to_envelope(
         "needs_review": needs_review,
         "audio_topology": _build_audio_topology(
             analysis=analysis, pm=pm, power_model_hint=power_model_hint, pin_crosschecks=pin_crosschecks,
+            ipcat_findings=ipcat_findings,
         ),
         "candidate_patch_series": kernel_history.get("candidates", []),
     }
@@ -466,7 +486,7 @@ def _map_analysis_to_envelope(
 
 def _build_audio_topology(
     *, analysis: dict[str, Any], pm: dict[str, Any], power_model_hint: dict[str, Any],
-    pin_crosschecks: list[dict[str, Any]],
+    pin_crosschecks: list[dict[str, Any]], ipcat_findings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Populate BringupCase.audio_topology (slice 4) from QGenie's analysis
     plus the Onboarding Accuracy Upgrade collectors' output. Purely additive
@@ -485,10 +505,68 @@ def _build_audio_topology(
     }
     if pin_crosschecks:
         topology["pin_crosschecks"] = pin_crosschecks
+    if ipcat_findings:
+        topology["ipcat_findings"] = ipcat_findings
     cites = _profile_cites(analysis)
     if cites:
         topology["citations"] = cites
     return topology
+
+
+# Fix #4 (Benchmark Readiness): IPCAT coverage clarity. This is a reporting/
+# diagnostic layer only -- it does NOT change how IPCAT evidence is discovered
+# or ingested (see source_intake_runner.discover_evidence /
+# _build_task_spec's ipcat_mcp gate, both untouched). It combines two signals:
+#   - deterministic, orchestrator-observed facts: whether any offline-cached
+#     evidence/ipcat/ files were found, and whether the task_spec asked
+#     QGenie to query IPCAT live via MCP (evidence["ipcat_mcp"]).
+#   - QGenie's own self-report (analysis["ipcat_findings"], schema 1.2.0) of
+#     whether it actually called an IPCAT MCP tool this session and whether
+#     the result was target-specific -- the orchestrator cannot observe a
+#     subprocess's live MCP tool calls any other way (see the Fix #4
+#     investigation: qgenie_analysis.json's free-text missing_evidence prose
+#     was, until now, the *only* place this observation existed at all).
+def _ipcat_evidence_summary(
+    *, analysis: dict[str, Any], evidence_files: list[str], ipcat_mcp_requested: bool,
+) -> dict[str, Any]:
+    offline_ipcat_files = [f for f in evidence_files if "/ipcat/" in f or "\\ipcat\\" in f]
+    self_report = analysis.get("ipcat_findings") or {}
+    mcp_queried = bool(self_report.get("queried"))
+    mcp_target_specific = bool(self_report.get("returned_target_specific"))
+    mcp_generic_only = bool(self_report.get("returned_generic_only"))
+
+    if mcp_target_specific:
+        status = "target_specific"
+        summary = "IPCAT (MCP) returned target-specific evidence."
+    elif offline_ipcat_files:
+        status = "target_specific"
+        summary = f"{len(offline_ipcat_files)} offline-cached IPCAT evidence file(s) available."
+    elif mcp_generic_only:
+        status = "generic_only"
+        summary = "IPCAT (MCP) was queried but returned only generic, non-target-specific content."
+    elif mcp_queried:
+        status = "generic_only"
+        summary = "IPCAT (MCP) was queried but did not report target-specific results."
+    elif ipcat_mcp_requested or offline_ipcat_files:
+        status = "queried_no_result"
+        summary = "IPCAT was queried (offline cache and/or MCP requested) but no usable evidence was found."
+    else:
+        status = "unavailable"
+        summary = "No IPCAT evidence source was available: no offline cache, no MCP query requested/self-reported."
+
+    return {
+        "status": status,
+        "summary": summary,
+        "offline_files_present": bool(offline_ipcat_files),
+        "offline_file_count": len(offline_ipcat_files),
+        "mcp_requested": ipcat_mcp_requested,
+        "mcp_queried_self_reported": mcp_queried,
+        "mcp_returned_target_specific": mcp_target_specific,
+        "mcp_returned_generic_only": mcp_generic_only,
+        "self_report_notes": self_report.get("notes") or "",
+        "self_report_citations": self_report.get("citations") or [],
+    }
+
 
 
 def _derive_codec_verdicts(codec_part_numbers: list[str], kernel_source: Path) -> dict[str, Any]:

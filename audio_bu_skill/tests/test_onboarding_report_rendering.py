@@ -130,10 +130,51 @@ def test_report_omits_pin_crosscheck_section_when_topology_present_but_no_verdic
           "even though Power Model Inspection (status=missing) still renders")
 
 
+def test_report_includes_ipcat_findings_section() -> None:
+    """Fix #4: surface audio_topology["ipcat_findings"] as its own section."""
+    gc = {
+        "needs_review": ["ipcat_coverage: generic_only — IPCAT (MCP) was queried but did not "
+                          "report target-specific results."],
+        "audio_topology": {
+            "ipcat_findings": {
+                "status": "generic_only",
+                "summary": "IPCAT (MCP) was queried but did not report target-specific results.",
+                "offline_files_present": False, "offline_file_count": 0,
+                "mcp_requested": True, "mcp_queried_self_reported": True,
+                "mcp_returned_target_specific": False, "mcp_returned_generic_only": True,
+                "self_report_notes": "only generic multi-SoC HPG chapters returned",
+                "self_report_citations": ["ipcat:HPG-generic-ch4"],
+            },
+        },
+    }
+    report = _render_onboarding_report(_output_with_generated_case(gc))
+
+    assert "## IPCAT Coverage" in report
+    assert "generic_only" in report
+    assert "only generic multi-SoC HPG chapters returned" in report
+    assert "ipcat:HPG-generic-ch4" in report
+    assert "ipcat_coverage: generic_only" in report  # also folded into NEEDS_REVIEW
+    print("PASS: report includes IPCAT Coverage section with expected fields when "
+          "audio_topology.ipcat_findings is present")
+
+
+def test_report_omits_ipcat_findings_section_when_absent() -> None:
+    gc = {
+        "needs_review": [],
+        "audio_topology": {"power_model": {"inspection_hint": {"status": "missing"}}},
+    }
+    report = _render_onboarding_report(_output_with_generated_case(gc))
+    assert "## IPCAT Coverage" not in report
+    print("PASS: IPCAT Coverage section omitted when audio_topology.ipcat_findings absent, "
+          "even though other audio_topology sub-sections are present")
+
+
 def main() -> None:
     test_report_includes_kernel_history_power_model_and_pin_crosscheck_sections()
     test_report_omits_new_sections_when_data_absent()
     test_report_omits_pin_crosscheck_section_when_topology_present_but_no_verdicts()
+    test_report_includes_ipcat_findings_section()
+    test_report_omits_ipcat_findings_section_when_absent()
     print("ALL TESTS PASSED")
 
 

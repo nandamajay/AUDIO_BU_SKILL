@@ -756,6 +756,42 @@ def _render_pin_crosscheck_section(gc: dict) -> list[str]:
     return lines
 
 
+def _render_ipcat_findings_section(gc: dict) -> list[str]:
+    """Fix #4 (Benchmark Readiness): surface IPCAT coverage clarity (folded into
+    generated_case["audio_topology"]["ipcat_findings"] by
+    target_onboarding_runner._ipcat_evidence_summary) in the report. Additive —
+    omitted when audio_topology/ipcat_findings absent."""
+    findings = (gc.get("audio_topology") or {}).get("ipcat_findings")
+    if not findings:
+        return []
+    lines = [
+        "",
+        "## IPCAT Coverage",
+        "",
+        "Diagnostic-only: whether IPCAT evidence was queried and whether it was "
+        "target-specific or only generic multi-SoC boilerplate. The orchestrator "
+        "cannot observe live MCP tool calls itself, so the MCP fields below are "
+        "QGenie's own self-report, combined with the orchestrator's own count of "
+        "offline-cached `evidence/ipcat/` files:",
+        "",
+        f"- status                         : `{findings.get('status')}`",
+        f"- summary                        : {findings.get('summary')}",
+        f"- offline IPCAT files found      : {findings.get('offline_file_count')}",
+        f"- IPCAT MCP query requested      : {findings.get('mcp_requested')}",
+        f"- IPCAT MCP query self-reported  : {findings.get('mcp_queried_self_reported')}",
+        f"- MCP returned target-specific   : {findings.get('mcp_returned_target_specific')}",
+        f"- MCP returned generic only      : {findings.get('mcp_returned_generic_only')}",
+    ]
+    notes = findings.get("self_report_notes")
+    if notes:
+        lines.append(f"- self-report notes              : {notes}")
+    citations = findings.get("self_report_citations") or []
+    if citations:
+        lines.append(f"- self-report citations          : {', '.join(f'`{c}`' for c in citations)}")
+    lines.append("")
+    return lines
+
+
 def _render_onboarding_report(output: dict) -> str:
     """Human-readable Markdown onboarding report with cited evidence."""
     gc = output["generated_case"]
@@ -834,6 +870,7 @@ def _render_onboarding_report(output: dict) -> str:
     lines += _render_kernel_history_section(gc)
     lines += _render_power_model_inspection_section(gc)
     lines += _render_pin_crosscheck_section(gc)
+    lines += _render_ipcat_findings_section(gc)
 
     lines += [
         "",

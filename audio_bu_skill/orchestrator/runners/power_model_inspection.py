@@ -17,8 +17,8 @@ Returns a graded status instead of a boolean:
     does not appear in it at all.
   - "missing": no rpmhpd driver source could be located under kernel_source.
 
-Not wired into the onboarding runner yet (slice 2 of the Onboarding Accuracy
-Upgrade) -- this file is standalone and self-tested only.
+Wired into target_onboarding_runner._power_model_hint (slice 2 of the
+Onboarding Accuracy Upgrade, benchmark-readiness Fix #3).
 """
 
 from __future__ import annotations
@@ -78,6 +78,40 @@ def _find_array_body(text: str, arr_name: str) -> tuple[str, int] | None:
     if not match:
         return None
     return match.group(1), _line_of(text, match.start())
+
+
+_RPMHPD_COMPAT_IN_DTSI_RE = re.compile(r'compatible\s*=\s*"(qcom,[a-z0-9]+-rpmhpd)"')
+
+
+def find_target_rpmhpd_compatible(kernel_source: str | Path, dtsi_search_name: str) -> str | None:
+    """Best-effort: find the target's own ``qcom,<x>-rpmhpd`` compatible string
+    directly in its checked-out .dts/.dtsi, independent of kernel_history.
+
+    kernel_history's git-log archaeology only surfaces compatible strings
+    introduced by FROMLIST/RFC/audio-tagged commits -- a target's rpmhpd node
+    is typically wired up by an ordinary (non-audio-tagged) base-platform
+    commit and is simply present in the checked-out tree today, so it is
+    invisible to that search. This scans the target's own dtsi file(s)
+    directly instead. Read-only; returns None (never raises) if no match.
+    """
+    if not dtsi_search_name:
+        return None
+    ks = Path(kernel_source)
+    dts_root = ks / "arch" / "arm64" / "boot" / "dts"
+    search_root = dts_root if dts_root.is_dir() else ks
+    pattern = f"*{dtsi_search_name}*"
+    candidates = list(search_root.rglob(pattern))[:_MAX_DTSI_SCAN]
+    for path in candidates:
+        if not path.is_file() or path.suffix not in (".dtsi", ".dts"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        match = _RPMHPD_COMPAT_IN_DTSI_RE.search(text)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _scan_dtsi_for_adsp_power_domains(kernel_source: Path, dtsi_search_name: str) -> bool | None:
