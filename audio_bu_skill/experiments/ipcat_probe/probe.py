@@ -33,6 +33,11 @@ Safety invariants (enforced in code below)
   (Path A) or the environment (Path B) — presence-checked, value never logged.
 * No write-capable operation is invoked. No file under the kernel tree or the
   production package is created or modified.
+* Live-call failures (TLS/DNS/connect/HTTP/MCP/library) are CAUGHT and mapped
+  to the exit-code contract with a redacted category label — never a traceback,
+  never a raw exception message (which could echo header/token material).
+* Every live call is bounded by a finite, configurable timeout
+  (IPCAT_PROBE_TIMEOUT, default 30s), reported as a clean failure.
 
 Usage
 -----
@@ -46,14 +51,34 @@ Usage
     IPCAT_PROBE_MECHANISM=A python probe.py --chip <NORD_ALIAS>
 
 Exit codes: 0 = success, 2 = partial (connected, unstructured/unresolved),
-3 = failure (no connect / boundary-unsafe path required). See PHASE1A_README.md.
+3 = failure (no connect / boundary-unsafe path required / live-call error /
+timeout). See PHASE1A_README.md.
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import sys
 from pathlib import Path
+
+# --------------------------------------------------------------------------
+# Tunables
+# --------------------------------------------------------------------------
+# Finite, configurable per-call timeout. Bounds every live call so a hung
+# endpoint yields a clean failure rather than an indefinite block.
+try:
+    PROBE_TIMEOUT_SECONDS = float(os.environ.get("IPCAT_PROBE_TIMEOUT", "30"))
+    if PROBE_TIMEOUT_SECONDS <= 0:
+        PROBE_TIMEOUT_SECONDS = 30.0
+except ValueError:
+    PROBE_TIMEOUT_SECONDS = 30.0
+
+# Named identifier fields used for chip resolution (NO substring matching).
+# This is the deterministic foundation Phase-1B's resolution contract builds on.
+IDENTIFIER_FIELDS = (
+    "chip_id", "id", "canonical_name", "name", "chip_name", "alias", "aliases",
+)
 
 # --------------------------------------------------------------------------
 # Read-only tool allow-list. A probe must never invoke anything not here.
@@ -72,6 +97,41 @@ READONLY_LIB_FUNCS = frozenset({
 
 # Files this probe must NEVER open, regardless of mechanism.
 FORBIDDEN_PATHS = ("auth.json",)
+
+
+def _classify_error(exc) -> str:
+    """Return a SAFE, redacted category for a live-call exception.
+
+    Walks the exception chain and reports only exception *type names* plus a
+    coarse category. The raw exception message is deliberately NOT included:
+    network errors are unlikely to echo the auth header, but omitting the
+    message removes any possibility of token leakage into probe output.
+    """
+    chain = []
+    seen = 0
+    e = exc
+    while e is not None and seen < 12:
+        chain.append(type(e).__name__)
+        e = e.__cause__ or e.__context__
+        seen += 1
+    names = " <- ".join(chain) or type(exc).__name__
+    low = names.lower()
+    if "sslcert" in low or "certificate" in low or "ssl" in low:
+        cat = "tls_verification_failed"
+    elif "gaierror" in low or "nameresolution" in low or "dns" in low:
+        cat = "dns_failure"
+    elif "timeout" in low:
+        cat = "timeout"
+    elif "connect" in low:
+        cat = "connection_failed"
+    elif "httpstatus" in low or "httperror" in low or "http" in low \
+            or "responsevalidation" in low:
+        cat = "http_error"
+    elif "mcp" in low or "tool" in low:
+        cat = "mcp_error"
+    else:
+        cat = "call_failed"
+    return f"{cat} ({names})"
 
 
 def _assert_not_forbidden(path: str) -> None:
@@ -147,6 +207,19 @@ def _is_structured(obj) -> bool:
     return isinstance(obj, (dict, list))
 
 
+def _call_with_timeout(fn, *args):
+    """Run a blocking callable with a finite wall-clock timeout.
+
+    Used for the synchronous Path B library call. Raises
+    concurrent.futures.TimeoutError on expiry (mapped to a clean failure by
+    the caller). The worker thread is not force-killed — it is abandoned as a
+    daemon — which is acceptable for a read-only probe.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn, *args)
+        return fut.result(timeout=PROBE_TIMEOUT_SECONDS)
+
+
 # --------------------------------------------------------------------------
 # Path B — ipcat_client library
 # --------------------------------------------------------------------------
@@ -174,11 +247,22 @@ def probe_path_b(chip: str) -> dict:
         result.update(connected=False, structured=False, nord_resolved=False,
                       note=f"ipcat_client.{fn_name} unavailable")
         return result
-    resp = fn()                                   # READ-ONLY enumerate
+    try:
+        resp = _call_with_timeout(fn)             # READ-ONLY enumerate, bounded
+    except concurrent.futures.TimeoutError:
+        result.update(connected=False, structured=False, nord_resolved=False,
+                      note=f"timeout after {PROBE_TIMEOUT_SECONDS:g}s")
+        return result
+    except BaseException as exc:                   # noqa: BLE001 — controlled
+        result.update(connected=False, structured=False, nord_resolved=False,
+                      note=_classify_error(exc))
+        return result
     structured = _is_structured(resp)
-    nord = _resolve_chip_in(resp, chip)
-    result.update(connected=True, structured=structured, nord_resolved=nord,
-                  note="ok" if (structured and nord) else "see fields")
+    resolution = _resolve_chip_in(resp, chip)
+    result.update(connected=True, structured=structured,
+                  nord_resolved=resolution["resolved"],
+                  resolution=resolution,
+                  note="ok" if (structured and resolution["resolved"]) else "see fields")
     return result
 
 
@@ -211,6 +295,9 @@ def probe_path_a(chip: str) -> dict:
 
     def _tls_on_factory(headers=None, auth=None, timeout=None, **kwargs):
         kwargs.setdefault("follow_redirects", True)
+        # A finite client timeout backstops the outer wall-clock timeout.
+        if timeout is None:
+            timeout = httpx.Timeout(PROBE_TIMEOUT_SECONDS)
         # verify=True — TLS verification stays ON (unlike k-genesis verify=False)
         return httpx.AsyncClient(headers=headers, auth=auth, timeout=timeout,
                                  verify=True, **kwargs)
@@ -224,41 +311,112 @@ def probe_path_a(chip: str) -> dict:
     _require_readonly(tool, READONLY_MCP_TOOLS)
 
     async def _run():
-        async with Client(transport) as c:
-            raw = await c.call_tool(tool, {})     # READ-ONLY enumerate
-            content = getattr(raw, "content", raw)
-            text = "".join(getattr(p, "text", "") for p in content) \
-                if isinstance(content, list) else str(content)
-            try:
-                return json.loads(text)
-            except (ValueError, TypeError):
-                return text                        # prose → unstructured
+        # Inner asyncio timeout so the connection cannot hang past the budget.
+        async def _inner():
+            async with Client(transport) as c:
+                raw = await c.call_tool(tool, {})  # READ-ONLY enumerate
+                content = getattr(raw, "content", raw)
+                text = "".join(getattr(p, "text", "") for p in content) \
+                    if isinstance(content, list) else str(content)
+                try:
+                    return json.loads(text)
+                except (ValueError, TypeError):
+                    return text                    # prose → unstructured
+        return await asyncio.wait_for(_inner(), timeout=PROBE_TIMEOUT_SECONDS)
 
-    resp = asyncio.run(_run())
+    try:
+        resp = asyncio.run(_run())
+    except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
+        result.update(connected=False, structured=False, nord_resolved=False,
+                      note=f"timeout after {PROBE_TIMEOUT_SECONDS:g}s")
+        return result
+    except BaseException as exc:                   # noqa: BLE001 — controlled
+        result.update(connected=False, structured=False, nord_resolved=False,
+                      note=_classify_error(exc))
+        return result
     structured = _is_structured(resp)
-    nord = _resolve_chip_in(resp, chip)
-    result.update(connected=True, structured=structured, nord_resolved=nord,
-                  note="ok" if (structured and nord) else "see fields")
+    resolution = _resolve_chip_in(resp, chip)
+    result.update(connected=True, structured=structured,
+                  nord_resolved=resolution["resolved"],
+                  resolution=resolution,
+                  note="ok" if (structured and resolution["resolved"]) else "see fields")
     return result
 
 
 # --------------------------------------------------------------------------
-# Nord resolution (question #3) — search a structured enumeration only.
-# Eliza is intentionally NOT resolved here (that is Phase-1B).
+# Nord resolution (question #3) — NAMED-FIELD matching over a structured
+# enumeration. NO substring matching. Deterministic selection + ambiguity
+# detection. This is the foundation Phase-1B's resolution contract builds on
+# (RESOLVED / ABSENT / AMBIGUOUS). Eliza is intentionally NOT resolved here.
 # --------------------------------------------------------------------------
 
-def _resolve_chip_in(resp, chip: str) -> bool:
+def _iter_rows(resp):
+    """Yield candidate row dicts from a structured enumeration."""
+    if isinstance(resp, list):
+        rows = resp
+    elif isinstance(resp, dict):
+        rows = resp.get("chips", resp.get("data", resp.get("results", [])))
+    else:
+        rows = []
+    return rows if isinstance(rows, list) else []
+
+
+def _field_values(row) -> list:
+    """Return the string values of a row's IDENTIFIER_FIELDS (only)."""
+    if not isinstance(row, dict):
+        return []
+    vals = []
+    for key in IDENTIFIER_FIELDS:
+        if key not in row:
+            continue
+        v = row[key]
+        if isinstance(v, (list, tuple)):
+            vals.extend(str(x) for x in v)
+        elif v is not None:
+            vals.append(str(v))
+    return vals
+
+
+def _resolve_chip_in(resp, chip: str) -> dict:
+    """Resolve *chip* against named identifier fields only.
+
+    Returns a structured resolution (the Phase-1B foundation):
+        {status: RESOLVED|ABSENT|AMBIGUOUS|UNSTRUCTURED,
+         resolved: bool, matched_field: str|None, candidates: [...]}
+
+    Matching is EXACT (case-insensitive) on a named identifier field — never a
+    JSON substring — so an alias that merely appears inside an unrelated value
+    cannot produce a false positive. >1 distinct matching row => AMBIGUOUS
+    (never silently picks one).
+    """
+    empty = {"status": "UNSTRUCTURED", "resolved": False,
+             "matched_field": None, "candidates": []}
     if not chip or not _is_structured(resp):
-        return False
+        return empty
     needle = chip.strip().lower()
-    rows = resp if isinstance(resp, list) else resp.get("chips", resp.get("data", []))
-    if not isinstance(rows, list):
-        return False
-    for row in rows:
-        hay = json.dumps(row).lower() if isinstance(row, (dict, list)) else str(row).lower()
-        if needle in hay:
-            return True
-    return False
+    matches = []
+    for idx, row in enumerate(_iter_rows(resp)):
+        for key in IDENTIFIER_FIELDS:
+            if not isinstance(row, dict) or key not in row:
+                continue
+            v = row[key]
+            candidates = ([str(x) for x in v]
+                          if isinstance(v, (list, tuple)) else [str(v)])
+            if any(c.strip().lower() == needle for c in candidates):
+                matches.append({"row_index": idx, "matched_field": key,
+                                "identifiers": _field_values(row)})
+                break
+    # Distinct rows only (same row matched via >1 field counts once).
+    distinct = {m["row_index"]: m for m in matches}
+    if len(distinct) == 1:
+        m = next(iter(distinct.values()))
+        return {"status": "RESOLVED", "resolved": True,
+                "matched_field": m["matched_field"], "candidates": [m]}
+    if len(distinct) > 1:
+        return {"status": "AMBIGUOUS", "resolved": False,
+                "matched_field": None, "candidates": list(distinct.values())}
+    return {"status": "ABSENT", "resolved": False,
+            "matched_field": None, "candidates": []}
 
 
 # --------------------------------------------------------------------------
@@ -286,6 +444,7 @@ def main() -> int:
             "path_a_mcp": {"config_present": a_present, "detail": a_sum},
             "note": "presence checks only; no connection attempted; "
                     "auth.json never accessed; TLS enforced when connecting",
+            "timeout_seconds": PROBE_TIMEOUT_SECONDS,
         }, indent=2))
         return 0
 

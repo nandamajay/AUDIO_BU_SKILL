@@ -22,6 +22,7 @@ Everything else (Eliza, counts, verdicts, generation) is deliberately out of sco
 | File | Purpose |
 |---|---|
 | `experiments/ipcat_probe/probe.py` | The standalone probe. `--check` (presence only, no deps) + `--mechanism A|B --chip <alias>` (live read-only lookup). |
+| `experiments/ipcat_probe/test_probe_hardening.py` | Offline tests (named-field resolution, error redaction, timeout, exit-code contract, guards). No network/deps. |
 | `experiments/ipcat_probe/PHASE1A_README.md` | This document. |
 
 No production file was created or modified. No dependency was installed.
@@ -72,8 +73,15 @@ Self-checks already run (no provisioning, no deps): `--check` → exit 0; missin
 
 - **TLS verification ALWAYS on** — `httpx.AsyncClient(..., verify=True)`; the k-genesis `verify=False` is explicitly *not* copied.
 - **`auth.json` never opened** — `FORBIDDEN_PATHS`/`_assert_not_forbidden` guard; token/config come from `~/.claude/.mcp.json` or env, and the token value is never returned or logged (presence-checked only).
-- **Read-only** — a hard allow-list (`READONLY_MCP_TOOLS` / `READONLY_LIB_FUNCS`) of enumerate/lookup names only; any other tool name raises before any call.
+- **Read-only** — a hard allow-list (`READONLY_MCP_TOOLS` / `READONLY_LIB_FUNCS`) of enumerate/lookup names only; any other tool name raises via `_require_readonly` (unconditional, survives `python -O`).
+- **Live-call failures are contained** — TLS/DNS/connect/HTTP/MCP/library errors are caught and mapped to `connected:false` → exit 3 with a **redacted category label** (`_classify_error`); the raw exception message is never emitted, so no header/token material can leak into output. No traceback escapes.
+- **Every live call is bounded by a finite timeout** — `IPCAT_PROBE_TIMEOUT` (default 30s); Path A via `asyncio.wait_for` + an httpx client timeout, Path B via a worker-thread `.result(timeout=...)`. Expiry → `connected:false` → exit 3 with a clean "timeout after Ns" note.
+- **Named-field chip matching** — resolution matches only exact (case-insensitive) values of named identifier fields (`IDENTIFIER_FIELDS`); no JSON substring matching. Returns a structured `{status: RESOLVED|ABSENT|AMBIGUOUS|UNSTRUCTURED, ...}` — the deterministic foundation for the Phase-1B resolution contract, incl. ambiguity detection (>1 distinct matching row → AMBIGUOUS, never auto-picked).
 - **No write-capable operation. No DT/code generation. No production code modification. No dependency install.**
+
+## Tests
+
+`python test_probe_hardening.py` (also passes under `python -O`) — 22 offline tests, no network or deps: named-field resolution (incl. substring-false-positive guard and ambiguity), error-category redaction (incl. no-token-leak), timeout, the exit-code contract via a fake `ipcat_client`, and the read-only/`auth.json` guards.
 
 ## Rollback procedure
 
