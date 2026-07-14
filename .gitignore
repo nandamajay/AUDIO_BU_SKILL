@@ -13,7 +13,6 @@ htmlcov/
 .venv/
 venv/
 env/
-
 # Runtime state/logs/artifacts
 state/
 logs/
@@ -21,7 +20,6 @@ artifacts/
 audio_bu_skill/state/
 *.log
 *.jsonl
-
 # Evidence / confidential collateral
 audio_bu_skill/targets/*/evidence/ipcat/*
 audio_bu_skill/targets/*/evidence/offline/*
@@ -39,11 +37,9 @@ IPCAT/
 *.zip
 *.tar
 *.tgz
-
 # Confidential findings / evidence notes (schematic- and IPCAT-derived)
 AUDIO_SCHEMATIC_FINDINGS.md
 AUDIO_EVIDENCE_TABLE.md
-
 # Kernel/build outputs
 linux-nord/
 linux*/
@@ -53,7 +49,6 @@ tmp/
 tmp-glibc/
 sstate-cache/
 downloads/
-
 # Local/editor
 .vscode/
 .idea/
@@ -61,29 +56,24 @@ downloads/
 *.swp
 *.swo
 .DS_Store
-
 # Secrets
 .env
 *.pem
 *.key
 id_rsa*
 id_ed25519*
-
 # Keep empty evidence folders (negate the evidence ignores above)
 !audio_bu_skill/targets/*/evidence/ipcat/.gitkeep
 !audio_bu_skill/targets/*/evidence/offline/.gitkeep
-
 # QGenie reasoning artifacts that may embed confidential evidence content/paths —
 # never commit the prompt or the raw model transcript. The validated structured
 # result (qgenie_analysis.json) and reasoning_error.json also embed evidence-derived
 # content and are likewise ignored below as generated per-target artifacts.
 audio_bu_skill/targets/*/qgenie_task_spec.json
 audio_bu_skill/targets/*/qgenie_raw_output.txt
-
 # Onboarding before/after snapshots may embed the same confidential evidence
 # content/paths (qgenie_task_spec.json, case.py citations) — never commit.
 audio_bu_skill/snapshots/
-
 # Generated per-target onboarding artifacts. These embed confidential
 # schematic/datasheet-derived content (LD20 refs, part numbers, register bases,
 # firmware names) surfaced by the reasoning run, so they are never committed.
@@ -96,13 +86,6 @@ audio_bu_skill/targets/*/onboarding_report.md
 audio_bu_skill/targets/*/profile.json
 audio_bu_skill/targets/*/similarity_report.json
 audio_bu_skill/targets/*/evidence_inventory.json
-__pycache__/
 *.pyc
-*.pyo
-audio_bu_skill/experiments/ipcat_probe/artifacts/
-prior_art/
-__pycache__/
-*.pyc
-*.pyo
 audio_bu_skill/experiments/ipcat_probe/artifacts/
 prior_art/
