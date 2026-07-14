@@ -101,3 +101,8 @@ __pycache__/
 *.pyo
 audio_bu_skill/experiments/ipcat_probe/artifacts/
 prior_art/
+__pycache__/
+*.pyc
+*.pyo
+audio_bu_skill/experiments/ipcat_probe/artifacts/
+prior_art/
