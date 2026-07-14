@@ -1032,3 +1032,473 @@ def track_t2(
             notes=notes,
         )
     ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WP6 — Track T5 (DTS Consistency Validation)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# T5 cross-checks device-tree fragments against the IPCAT silicon-identity
+# authority (``chips_list_chips``). It looks for two failure modes:
+#
+#   * *donor-family leaks* — a DTS fragment matching a namespace pattern from
+#     another silicon family (e.g. ``qcom,sa8775p-adsp-pas`` in a Nord DTS,
+#     ``sa8775p/adsp.mbn`` firmware path, rpmhpd LCX/LMX power-domain refs)
+#     under a chip whose canonical family is NOT that donor. Each such match
+#     emits a DISAGREE_WITH_AUTHORITY row (warning=True by default) with a
+#     reviewer-facing review action naming the target-family replacement.
+#   * *unpinned revision* — a DTS that declares neither ``qcom,board-id`` nor
+#     ``qcom,msm-id`` cannot be cross-checked against a specific silicon
+#     revision; a single NOT_CROSS_CHECKABLE row with coverage_gap_reason
+#     ``revision_not_pinned`` is emitted so this shows up on the review page.
+#
+# When ``chips_list_chips`` is unavailable, T5 falls back to the source-declared
+# family (attached to the DTS payload dict under ``family``/``silicon_family``/
+# ``soc_family``). Donor rules are still evaluated but at *medium* confidence
+# and citations carry ``chips_list_chips:<unavailable>`` for provenance. If no
+# source family is declared either, a single silicon-identity NOT_CROSS_CHECKABLE
+# row is emitted (coverage_gap_reason=authority_unavailable) and donor rules
+# are skipped entirely — we won't guess a family from the very DTS the check
+# would evaluate, since that lets a donor leak declare itself legal.
+#
+# The KB rules (donor patterns, target-family expected prefixes, meta-rule ids)
+# live in ``orchestrator/reasoning/crossverify_config.py``. This module never
+# hard-codes any pattern text — it only reads that config.
+
+import re as _t5_re
+
+from orchestrator.reasoning.crossverify_config import (
+    T5_DONOR_RULES as _T5_DONOR_RULES,
+    T5_META_RULES as _T5_META_RULES,
+    T5_TARGET_IDENTITY as _T5_TARGET_IDENTITY,
+)
+
+_T5_AUTH_ORIGIN: str = "ipcat.chips_list_chips"
+_T5_SUBJECT_IDENTITY: str = "silicon_identity"
+_T5_SUBJECT_REVISION: str = "dts.revision_anchor"
+
+#: Regex that pulls a canonical family token out of an IPCAT chip name. Examples:
+#: ``"SA8797P (NordAU) v2"`` → ``"sa8797p"``; ``"SA8775P (LeMans)"`` → ``"sa8775p"``.
+_T5_FAMILY_RE = _t5_re.compile(
+    r"\b(?P<fam>SA[0-9]{4}P|SM[0-9]{4}|QRB[0-9]+P?|SC[0-9]{4})\b",
+    _t5_re.IGNORECASE,
+)
+
+#: Regexes that detect the two DTS revision-anchor properties.
+_T5_BOARD_ID_RE = _t5_re.compile(r"qcom,board-id\b")
+_T5_MSM_ID_RE = _t5_re.compile(r"qcom,msm-id\b")
+
+
+def _t5_flatten_dts(dts: Any) -> str:
+    """Coerce the T5 ``dts`` input into a single string for pattern matching.
+
+    Accepts (WP6 requirement 2):
+
+      * raw string → returned verbatim;
+      * dict with ``dts`` / ``text`` / ``content`` key → its string value;
+      * list of any of the above (multi-file) → their newline-joined
+        concatenation so patterns can match across files;
+      * anything else (None, empty, unusable) → ``""``.
+
+    Never raises. The one behavioral choice: multi-file inputs are joined with
+    ``"\n"`` so a donor pattern spanning two files would still hit if the raw
+    text had spanned them — but the individual patterns in the KB are all
+    single-token, so in practice this only ensures no cross-file gap swallows
+    a pattern's leading anchor.
+    """
+    if dts is None:
+        return ""
+    if isinstance(dts, str):
+        return dts
+    if isinstance(dts, dict):
+        for key in ("dts", "text", "content"):
+            value = dts.get(key)
+            if isinstance(value, str):
+                return value
+        return ""
+    if isinstance(dts, list):
+        parts: list[str] = []
+        for item in dts:
+            parts.append(_t5_flatten_dts(item))
+        return "\n".join(parts)
+    return ""
+
+
+def _t5_source_meta(dts: Any) -> dict[str, Any]:
+    """Extract the ``family``/``silicon_family``/``soc_family`` keys from ``dts``.
+
+    Returns ``{}`` when ``dts`` isn't a dict or doesn't declare a family key.
+    The source-declared family is the *only* fallback authority — we refuse to
+    infer family from the DTS body itself (donor leaks would then legitimize
+    themselves).
+    """
+    if not isinstance(dts, dict):
+        return {}
+    picked: dict[str, Any] = {}
+    for key in ("family", "silicon_family", "soc_family"):
+        if key in dts:
+            picked[key] = dts[key]
+    return picked
+
+
+def _t5_normalize_family(token: Any) -> str | None:
+    """Return a lower-case canonical family token (e.g. ``"sa8797p"``), or None."""
+    if not isinstance(token, str) or not token.strip():
+        return None
+    match = _T5_FAMILY_RE.search(token)
+    if match:
+        return match.group("fam").lower()
+    return None
+
+
+def _t5_authority_family(snapshot: dict[str, Any]) -> tuple[str | None, str, str]:
+    """Read the silicon identity from ``chips_list_chips`` in ``snapshot``.
+
+    Returns ``(canonical_family, chip_name, status)`` where ``status`` is:
+
+      * ``"ok"`` — payload yielded a well-formed family token;
+      * ``"empty"`` — tool ran successfully but nothing usable came back;
+      * ``"unavailable"`` — tool entry missing or status != "ok".
+
+    ``chip_name`` is a short display label suitable for citations. It's
+    ``"<unavailable>"`` whenever ``status != "ok"``.
+    """
+    tools = snapshot.get("tools") or {}
+    entry = tools.get("chips_list_chips")
+    if not isinstance(entry, dict):
+        return None, "<unavailable>", "unavailable"
+    if entry.get("status") != "ok":
+        return None, "<unavailable>", "unavailable"
+    payload = entry.get("payload")
+    rows: list[Any] = []
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        for key in ("chips", "results", "items"):
+            maybe = payload.get(key)
+            if isinstance(maybe, list):
+                rows = maybe
+                break
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name") or row.get("chip_name") or row.get("alias")
+        family = _t5_normalize_family(name)
+        if family is not None:
+            return family, str(name), "ok"
+    return None, "<unavailable>", "empty"
+
+
+def _t5_has_revision_pin(dts_text: str) -> bool:
+    """True iff the DTS text declares ``qcom,board-id`` OR ``qcom,msm-id``."""
+    if not dts_text:
+        return False
+    return bool(_T5_BOARD_ID_RE.search(dts_text)) or bool(_T5_MSM_ID_RE.search(dts_text))
+
+
+def _t5_matching_donor_rules(
+    dts_text: str,
+    target_family: str | None,
+) -> list[tuple[dict[str, str], list[str]]]:
+    """Return ``[(rule, matched_strings)]`` for donor rules that fire against ``dts_text``.
+
+    A rule fires when:
+
+      * its ``pattern`` (regex, compiled with ``re.findall``) returns ≥ 1 hit
+        in ``dts_text``; AND
+      * its declared ``family`` is NOT ``target_family`` (rules whose family
+        matches the target are the target's own namespace, not a donor leak).
+
+    ``matched_strings`` is the ordered list of literal matches (deduped, first
+    occurrence preserved). Preserving order matters for determinism: the
+    review action quotes the first match, so a fixed order → fixed output.
+    """
+    if not dts_text:
+        return []
+    hits: list[tuple[dict[str, str], list[str]]] = []
+    for rule in _T5_DONOR_RULES:
+        if target_family and rule.get("family") == target_family:
+            continue
+        pattern = rule.get("pattern") or ""
+        try:
+            matches = _t5_re.findall(pattern, dts_text)
+        except _t5_re.error:
+            # A misauthored KB pattern shouldn't crash T5; skip and continue.
+            continue
+        if not matches:
+            continue
+        strs: list[str] = []
+        for m in matches:
+            # Non-capturing groups produce strings; capturing groups would
+            # produce tuples — the KB uses only (?:...) but be defensive.
+            s = m if isinstance(m, str) else (m[0] if m else "")
+            if s and s not in strs:
+                strs.append(s)
+        if strs:
+            hits.append((rule, strs))
+    return hits
+
+
+def _t5_review_action_for(
+    rule: dict[str, str],
+    strs: list[str],
+    target_family: str | None,
+) -> str:
+    """Compose the reviewer-facing review action for a donor-rule hit.
+
+    Phrasing follows WP6 requirement 6: name the offending fragment, name the
+    target family, and (for compatible/firmware) quote the target's expected
+    prefix from :data:`T5_TARGET_IDENTITY`.
+    """
+    kind = rule.get("kind") or "misc"
+    donor_family = rule.get("family") or "<donor>"
+    example = strs[0] if strs else "<match>"
+    target = target_family or "<target-family>"
+    target_meta = _T5_TARGET_IDENTITY.get(target) or {}
+    if kind == "compatible":
+        return (
+            f"replace {example!r} with the {target.upper()}-family compatible "
+            f"(expected prefix {target_meta.get('expected_compatible_prefix', '<unknown>')!r})"
+        )
+    if kind == "firmware":
+        return (
+            f"correct firmware path: change {example!r} to the {target.upper()}-family "
+            f"firmware path (expected prefix {target_meta.get('expected_firmware_prefix', '<unknown>')!r})"
+        )
+    if kind == "power_domain":
+        return (
+            f"power-domain namespace (LCX/LMX from {donor_family}) is LeMans/rpmhpd-specific; "
+            f"target uses {target_meta.get('power_domain_style', 'scmi')} power domains — "
+            f"replace {example!r} with scmiN_pd refs"
+        )
+    return (
+        f"remove donor-family fragment {example!r} ({donor_family}/{kind}); "
+        f"target family is {target}"
+    )
+
+
+def _t5_citations(chip_name: str, rule_id: str) -> list[str]:
+    """Return the two citations every T5 row must carry (WP6 requirement 7)."""
+    return [f"chips_list_chips:{chip_name}", f"kb.rule:{rule_id}"]
+
+
+def _t5_row(
+    *,
+    subject: str,
+    verdict: str,
+    source: Any,
+    authority: dict[str, Any],
+    confidence: str,
+    coverage_gap_reason: str | None = None,
+    review_actions: list[str] | None = None,
+    citations: list[str],
+    notes: list[str] | None = None,
+) -> VerificationRow:
+    """Small factory around :class:`VerificationRow` for T5's verdict shapes."""
+    return VerificationRow(
+        track="T5",
+        subject=subject,
+        verdict=verdict,
+        source=source,
+        authority=authority,
+        confidence=confidence,
+        coverage_gap_reason=coverage_gap_reason,
+        review_actions=list(review_actions or []),
+        citations=list(citations),
+        notes=list(notes or []),
+    )
+
+
+def track_t5(
+    snapshot: dict[str, Any],
+    dts: Any,
+    kb: dict[str, Any] | None = None,
+) -> list[VerificationRow]:
+    """T5 — DTS Consistency Validation via ``chips_list_chips``.
+
+    Consumes only ``snapshot["tools"]["chips_list_chips"]`` from the snapshot
+    (WP6 requirement 1). Other DTS facts come from ``dts``, which may be
+    a string, a dict with a ``dts``/``text``/``content`` key (optionally
+    carrying ``family``/``silicon_family``/``soc_family`` for the fallback
+    path), a list of such dicts (multi-file, concatenated), or empty/None.
+
+    KB rules (donor patterns, target-family expected prefixes) live in
+    :mod:`orchestrator.reasoning.crossverify_config`. ``kb`` is reserved for
+    future opt-in overrides and is not consulted here.
+
+    Decision tree (WP6 requirement 4, precedence top-down):
+
+      1. ``chips_list_chips`` available (status == "ok" AND yields a family):
+
+         * emit one ``DISAGREE_WITH_AUTHORITY`` row (confidence=high,
+           warning=True) per donor rule that matches the DTS text and whose
+           declared family is NOT the authority's target family;
+         * donor rules that match AND ARE the target family are ignored
+           (they are the target's own namespace, not a leak);
+         * if no donor matches and DTS has no ``qcom,board-id`` /
+           ``qcom,msm-id`` → one ``NOT_CROSS_CHECKABLE`` row
+           (revision_not_pinned, confidence=none). The revision-anchor row
+           is emitted alongside any donor rows when both fire.
+
+      2. ``chips_list_chips`` unavailable, and ``dts`` carries a
+         source-declared family key:
+
+         * donor rules still evaluated, but confidence downgrades to
+           ``medium`` and citations carry ``chips_list_chips:<unavailable>``;
+         * authority strength downgrades to ``KB_RULE``;
+         * revision-anchor NCC row still emitted when applicable.
+
+      3. ``chips_list_chips`` unavailable AND no source-declared family:
+
+         * one silicon-identity ``NOT_CROSS_CHECKABLE`` row
+           (authority_unavailable, confidence=none). Donor rules are skipped
+           entirely — we won't infer family from a DTS whose donor leak is
+           exactly what T5 is meant to find.
+    """
+    del kb  # T5 does not consult the KB parameter in this WP
+
+    dts_text = _t5_flatten_dts(dts)
+    source_meta = _t5_source_meta(dts)
+    authority_family, chip_name, auth_status = _t5_authority_family(snapshot)
+    rows: list[VerificationRow] = []
+
+    # ── Path 1: authority available ─────────────────────────────────────────
+    if auth_status == "ok":
+        target = authority_family  # invariant: not None when auth_status == "ok"
+        authority_value = {
+            "strength": "IPCAT_DIRECT",
+            "origin": _T5_AUTH_ORIGIN,
+            "value": {"canonical_family": target, "chip_name": chip_name},
+        }
+        # Donor rule sweep — one row per matching rule
+        for rule, strs in _t5_matching_donor_rules(dts_text, target):
+            rows.append(
+                _t5_row(
+                    subject=f"dts.{rule['kind']}",
+                    verdict="DISAGREE_WITH_AUTHORITY",
+                    source={
+                        "dts_fragments": strs,
+                        "donor_family": rule.get("family"),
+                    },
+                    authority=dict(authority_value),
+                    confidence="high",
+                    citations=_t5_citations(chip_name, rule["rule_id"]),
+                    review_actions=[_t5_review_action_for(rule, strs, target)],
+                    notes=[
+                        f"donor-family leak: rule {rule['rule_id']} matched "
+                        f"{len(strs)} DTS fragment(s); target family is {target}"
+                    ],
+                )
+            )
+        # Revision-anchor sweep — one NCC row iff DTS declares neither pin.
+        # We only emit this row when there IS DTS text to check; empty DTS
+        # input returns [] (nothing to check).
+        if dts_text and not _t5_has_revision_pin(dts_text):
+            rows.append(
+                _t5_row(
+                    subject=_T5_SUBJECT_REVISION,
+                    verdict="NOT_CROSS_CHECKABLE",
+                    source={"dts_fragments": []},
+                    authority=dict(authority_value),
+                    confidence="none",
+                    coverage_gap_reason="revision_not_pinned",
+                    citations=_t5_citations(
+                        chip_name, _T5_META_RULES["revision_not_pinned"]
+                    ),
+                    review_actions=[
+                        "add qcom,board-id and/or qcom,msm-id to pin this DTS "
+                        "to a specific chip revision"
+                    ],
+                    notes=[
+                        "DTS declares neither qcom,board-id nor qcom,msm-id; "
+                        "revision cannot be cross-checked"
+                    ],
+                )
+            )
+        return rows
+
+    # ── Path 2: authority unavailable, source-declared family present ──────
+    fallback_family = None
+    for key in ("family", "silicon_family", "soc_family"):
+        fallback_family = _t5_normalize_family(source_meta.get(key))
+        if fallback_family is not None:
+            break
+
+    if fallback_family is not None:
+        authority_value = {
+            "strength": "KB_RULE",
+            "origin": "kb.crossverify_config",
+            "value": {
+                "canonical_family": fallback_family,
+                "chip_name": "<unavailable>",
+            },
+        }
+        for rule, strs in _t5_matching_donor_rules(dts_text, fallback_family):
+            rows.append(
+                _t5_row(
+                    subject=f"dts.{rule['kind']}",
+                    verdict="DISAGREE_WITH_AUTHORITY",
+                    source={
+                        "dts_fragments": strs,
+                        "donor_family": rule.get("family"),
+                        "family": fallback_family,
+                    },
+                    authority=dict(authority_value),
+                    confidence="medium",
+                    citations=_t5_citations("<unavailable>", rule["rule_id"]),
+                    review_actions=[
+                        _t5_review_action_for(rule, strs, fallback_family)
+                    ],
+                    notes=[
+                        f"chips_list_chips unavailable; donor rule "
+                        f"{rule['rule_id']} evaluated against source-declared "
+                        f"family {fallback_family} (confidence=medium)"
+                    ],
+                )
+            )
+        if dts_text and not _t5_has_revision_pin(dts_text):
+            rows.append(
+                _t5_row(
+                    subject=_T5_SUBJECT_REVISION,
+                    verdict="NOT_CROSS_CHECKABLE",
+                    source={"dts_fragments": [], "family": fallback_family},
+                    authority=dict(authority_value),
+                    confidence="none",
+                    coverage_gap_reason="revision_not_pinned",
+                    citations=_t5_citations(
+                        "<unavailable>", _T5_META_RULES["revision_not_pinned"]
+                    ),
+                    review_actions=[
+                        "add qcom,board-id and/or qcom,msm-id to pin this DTS "
+                        "to a specific chip revision"
+                    ],
+                    notes=[
+                        "DTS declares neither qcom,board-id nor qcom,msm-id; "
+                        "revision cannot be cross-checked"
+                    ],
+                )
+            )
+        return rows
+
+    # ── Path 3: authority unavailable AND no source-declared family ────────
+    return [
+        _t5_row(
+            subject=_T5_SUBJECT_IDENTITY,
+            verdict="NOT_CROSS_CHECKABLE",
+            source=source_meta or None,
+            authority={"strength": "UNAVAILABLE", "origin": "none"},
+            confidence="none",
+            coverage_gap_reason="authority_unavailable",
+            citations=_t5_citations(
+                "<unavailable>", _T5_META_RULES["silicon_identity"]
+            ),
+            review_actions=[
+                "chips_list_chips unavailable and no source-declared silicon "
+                "family; re-run collector or declare family in DTS payload"
+            ],
+            notes=[
+                "silicon identity cannot be established; donor rules skipped "
+                "to avoid legitimizing donor leaks by inference"
+            ],
+        )
+    ]
