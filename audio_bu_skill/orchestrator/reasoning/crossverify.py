@@ -669,3 +669,366 @@ def track_t1(
         )
 
     return rows_out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WP5 — Track T2 (Bus / SoundWire-Master Validation)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# T2 cross-checks the schematic's SoundWire-master count against the IPCAT SWI
+# catalog. The Phase-2A V2 spec (§2/T2, §3.1, §4) says:
+#
+#   * source ``soundwire.present == false`` AND catalog union count == 0
+#       → MATCH (Nord's I2S-only case; both sides agree there is no SWR block);
+#   * source ``master_count`` == catalog union count (both > 0) → MATCH;
+#   * counts differ → DISAGREE_WITH_AUTHORITY (warning=True by default);
+#   * source self-flagged ``ambiguous == true`` → NOT_CROSS_CHECKABLE
+#       (coverage_gap_reason=source_ambiguous);
+#   * any SWI term hit its result cap → verdict marked *provisional*
+#       (confidence downgraded, caveat recorded in ``notes``/``review_actions``);
+#   * ``swi_search_swi`` unavailable in the snapshot → NOT_CROSS_CHECKABLE
+#       with coverage_gap_reason=authority_unavailable.
+#
+# Counting discipline (W4): the union counter draws on the three soundwire-
+# relevant terms {SOUNDWIRE_MASTER, SWR_MSTR, SWR}. For each term whose per-term
+# entry has status="ok", the counter walks the payload's ``results`` list and
+# adds each distinct named block (by ``name``/``symbol``/``module`` — first non-
+# empty key wins) into a set. ``len(set)`` is the count. ``total_hits`` is
+# **never** consulted; ``len()`` of a mislabeled field is **never** used;
+# per-term entries whose status != "ok" are ignored for counting (but their
+# ``queries`` are still recorded in the citation for full provenance).
+#
+# The snapshot wire shape (produced by ``crossverify_collector.py``):
+#
+#     snapshot["tools"]["swi_search_swi"] = {
+#         "status": "ok" | "unavailable",
+#         "payload": {
+#             "SOUNDWIRE_MASTER": {"status": "ok", "payload": {...}},
+#             "SWR_MSTR":         {"status": "ok" | "unavailable", ...},
+#             "SWR":              {"status": "ok" | "unavailable", ...},
+#             "LPASS_MACRO":      {...},   # not consumed by T2
+#             "LPASS":            {...},   # not consumed by T2
+#         },
+#         "result_digest": <sha256 hex | None>,
+#         "queries":       ["SOUNDWIRE_MASTER", "SWR_MSTR", "SWR", "LPASS_MACRO", "LPASS"],
+#         # status == "unavailable" also carries "error_class": "all_swi_queries_failed"
+#     }
+
+_T2_AUTH_ORIGIN: str = "ipcat.swi_search_swi"
+_T2_SOUNDWIRE_TERMS: tuple[str, ...] = ("SOUNDWIRE_MASTER", "SWR_MSTR", "SWR")
+
+#: A per-term result list at/above this many rows is treated as *possibly*
+#: truncated by the SWI backend's search cap. Downstream the verdict is marked
+#: provisional and confidence is downgraded. Chosen to match the SWI backend's
+#: default page size; the exact cap is opaque to us so we conservatively assume
+#: any full-page response could be capped.
+_T2_SWI_RESULT_CAP: int = 25
+
+
+def _t2_source_view(source: Any) -> dict[str, Any]:
+    """Unwrap a schematic-side source view for T2.
+
+    Accepts either the raw soundwire dict at the top level, or a wrapper dict
+    with keys like ``soundwire`` / ``buses`` / ``audio_topology``. Returns
+    ``{}`` for anything unusable — the caller then falls back to policy
+    defaults (present unknown, master_count unknown, ambiguous unknown).
+    """
+    if source is None:
+        return {}
+    if not isinstance(source, dict):
+        return {}
+    # explicit wrapping keys — first non-empty wins
+    for key in ("soundwire", "buses", "audio_topology"):
+        wrapped = source.get(key)
+        if isinstance(wrapped, dict) and wrapped:
+            # audio_topology sometimes wraps soundwire under another key
+            inner = wrapped.get("soundwire")
+            if isinstance(inner, dict) and inner:
+                return inner
+            return wrapped
+    return source
+
+
+def _t2_named_block_id(entry: Any) -> str | None:
+    """Return a stable identity string for one SWI result row, or None.
+
+    Set-stability picks the first non-empty key of (name, symbol, module). A
+    row with no identifier at all is ignored — we never trust an unlabeled
+    hit as a distinct block, since collapsing multiple such hits would
+    understate the count and treating each one as distinct would inflate it.
+    """
+    if not isinstance(entry, dict):
+        return None
+    for key in ("name", "symbol", "module"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _t2_iter_result_rows(term_payload: Any) -> list[dict[str, Any]]:
+    """Yield the per-hit rows from a single SWI term's payload.
+
+    SWI returns a dict with a top-level ``results`` list (see the collector's
+    FakeTransport fixture). Any other shape is treated as empty — we never
+    ``len()`` a mislabeled field.
+    """
+    if not isinstance(term_payload, dict):
+        return []
+    results = term_payload.get("results")
+    if isinstance(results, list):
+        return [r for r in results if isinstance(r, dict)]
+    return []
+
+
+def _t2_union_count(swi_payload: dict[str, Any]) -> tuple[int, bool, list[str]]:
+    """Return ``(distinct_block_count, at_cap, terms_used)`` for the three soundwire terms.
+
+    Walks the per-term breakdown ``swi_payload[term]``; for each term whose
+    status is ``ok`` it takes the ``results`` list, extracts a stable identity
+    per row, and adds it to a growing set. ``at_cap`` is True iff any *healthy*
+    term returned a page at/above ``_T2_SWI_RESULT_CAP`` (possible truncation
+    → provisional). ``terms_used`` is the ordered list of terms whose payload
+    contributed.
+    """
+    seen: set[str] = set()
+    at_cap = False
+    used: list[str] = []
+    for term in _T2_SOUNDWIRE_TERMS:
+        per_term = swi_payload.get(term) if isinstance(swi_payload, dict) else None
+        if not isinstance(per_term, dict):
+            continue
+        if per_term.get("status") != "ok":
+            continue
+        used.append(term)
+        rows = _t2_iter_result_rows(per_term.get("payload"))
+        if len(rows) >= _T2_SWI_RESULT_CAP:
+            at_cap = True
+        for row in rows:
+            block_id = _t2_named_block_id(row)
+            if block_id is not None:
+                seen.add(block_id)
+    return len(seen), at_cap, used
+
+
+def _t2_provenance_citation(
+    snapshot: dict[str, Any], terms_used: list[str]
+) -> list[str]:
+    """Return the ``swi_search_swi:<terms>`` provenance citation.
+
+    Always recorded (V2 requirement 6 parity with T1's ``gpio_map:`` line) so
+    a reviewer can see which SWI terms actually spoke. When no term spoke, the
+    citation lists the terms in the snapshot's declared ``queries`` field
+    (the three soundwire terms intersected with what the collector actually
+    fired) so provenance is never silently empty.
+    """
+    tools = snapshot.get("tools") or {}
+    swi = tools.get("swi_search_swi") or {}
+    if terms_used:
+        return [f"swi_search_swi:{'+'.join(terms_used)}"]
+    # No healthy term spoke — record the declared query set for provenance.
+    declared = swi.get("queries") or list(_T2_SOUNDWIRE_TERMS)
+    intersected = [t for t in declared if t in _T2_SOUNDWIRE_TERMS] or list(
+        _T2_SOUNDWIRE_TERMS
+    )
+    return [f"swi_search_swi:<none_of:{'+'.join(intersected)}>"]
+
+
+def _t2_row(
+    *,
+    subject: str,
+    verdict: str,
+    source: Any,
+    authority: dict[str, Any],
+    confidence: str,
+    coverage_gap_reason: str | None = None,
+    review_actions: list[str] | None = None,
+    citations: list[str],
+    notes: list[str] | None = None,
+) -> VerificationRow:
+    """Small factory around :class:`VerificationRow` for T2's verdict shapes."""
+    return VerificationRow(
+        track="T2",
+        subject=subject,
+        verdict=verdict,
+        source=source,
+        authority=authority,
+        confidence=confidence,
+        coverage_gap_reason=coverage_gap_reason,
+        review_actions=list(review_actions or []),
+        citations=list(citations),
+        notes=list(notes or []),
+    )
+
+
+def track_t2(
+    snapshot: dict[str, Any],
+    source: Any,
+    kb: dict[str, Any] | None = None,
+) -> list[VerificationRow]:
+    """T2 — Bus / SoundWire-Master validation via ``swi_search_swi``.
+
+    Consumes only ``snapshot["tools"]["swi_search_swi"]`` (per WP5 requirement
+    1) and the schematic-side ``source`` view. Emits exactly one row on the
+    subject ``"soundwire_master"``. Never touches ``kb`` in this WP.
+
+    Decision tree (WP5 requirement 3, precedence top-down):
+      1. ``swi_search_swi.status == "unavailable"`` → NOT_CROSS_CHECKABLE
+         (authority_unavailable, confidence=none);
+      2. Source self-flagged ``ambiguous: true`` → NOT_CROSS_CHECKABLE
+         (source_ambiguous, confidence=none);
+      3. Source ``present == false`` AND catalog union count == 0 → MATCH;
+      4. Source ``master_count`` == catalog union count (both > 0) → MATCH;
+      5. Otherwise counts differ → DISAGREE_WITH_AUTHORITY (warning=True);
+      6. Any healthy term at/above ``_T2_SWI_RESULT_CAP`` → verdict marked
+         provisional (confidence downgraded from ``high`` to ``provisional``,
+         caveat recorded in notes and appended to review_actions).
+    """
+    del kb  # T2 does not consult the KB in this WP
+
+    subject = "soundwire_master"
+    src_view = _t2_source_view(source)
+    src_present = src_view.get("present")
+    src_master_count_raw = src_view.get("master_count")
+    src_master_count = (
+        int(src_master_count_raw)
+        if isinstance(src_master_count_raw, int)
+        else None
+    )
+    src_ambiguous = bool(src_view.get("ambiguous"))
+
+    tools = snapshot.get("tools") or {}
+    swi = tools.get("swi_search_swi") or {}
+    swi_status = swi.get("status")
+
+    # 1. authority unavailable
+    if swi_status != "ok":
+        return [
+            _t2_row(
+                subject=subject,
+                verdict="NOT_CROSS_CHECKABLE",
+                source={
+                    "present": src_present,
+                    "master_count": src_master_count,
+                    "ambiguous": src_ambiguous,
+                }
+                if src_view
+                else None,
+                authority={"strength": "UNAVAILABLE", "origin": "none"},
+                confidence="none",
+                coverage_gap_reason="authority_unavailable",
+                citations=_t2_provenance_citation(snapshot, terms_used=[]),
+                review_actions=[
+                    "swi_search_swi unavailable; re-run collector to obtain SWI catalog"
+                ],
+                notes=["swi_search_swi returned no usable payload for the three soundwire terms"],
+            )
+        ]
+
+    # Compute catalog union count from the per-term payload
+    swi_payload = swi.get("payload") if isinstance(swi.get("payload"), dict) else {}
+    catalog_count, at_cap, terms_used = _t2_union_count(swi_payload)
+    citations = _t2_provenance_citation(snapshot, terms_used)
+
+    # 2. source ambiguous
+    if src_ambiguous:
+        ambiguity_note = src_view.get("ambiguity_note") or "source flagged ambiguous"
+        return [
+            _t2_row(
+                subject=subject,
+                verdict="NOT_CROSS_CHECKABLE",
+                source={
+                    "present": src_present,
+                    "master_count": src_master_count,
+                    "ambiguous": True,
+                },
+                authority={
+                    "strength": "IPCAT_DIRECT",
+                    "origin": _T2_AUTH_ORIGIN,
+                    "value": {"soundwire_master_count": catalog_count},
+                },
+                confidence="none",
+                coverage_gap_reason="source_ambiguous",
+                citations=citations,
+                review_actions=[f"resolve source ambiguity on soundwire: {ambiguity_note}"],
+                notes=[f"catalog union count = {catalog_count} across {terms_used or 'no terms'}"],
+            )
+        ]
+
+    # Build the authority object for the count-comparison branches
+    authority = {
+        "strength": "IPCAT_DIRECT",
+        "origin": _T2_AUTH_ORIGIN,
+        "value": {"soundwire_master_count": catalog_count},
+    }
+    source_out = {
+        "present": src_present,
+        "master_count": src_master_count,
+        "ambiguous": False,
+    }
+
+    # 3. I2S-only case: source says no SWR AND catalog union is empty
+    if src_present is False and catalog_count == 0:
+        confidence = "provisional" if at_cap else "high"
+        notes = [
+            f"soundwire.present=False and catalog union count=0 across {terms_used or 'no terms'} → MATCH (I2S-only)"
+        ]
+        review_actions: list[str] = []
+        if at_cap:
+            notes.append(
+                f"one or more SWI terms returned {_T2_SWI_RESULT_CAP} rows (result cap possibly hit); "
+                "confidence downgraded to provisional"
+            )
+            review_actions.append(
+                "SWI result cap possibly hit; re-run with higher page size to confirm set stability"
+            )
+        return [
+            _t2_row(
+                subject=subject,
+                verdict="MATCH",
+                source=source_out,
+                authority=authority,
+                confidence=confidence,
+                citations=citations,
+                review_actions=review_actions,
+                notes=notes,
+            )
+        ]
+
+    # 4./5. count comparison — both sides have a count
+    if src_master_count is not None and src_master_count == catalog_count:
+        verdict = "MATCH"
+        review_actions = []
+    else:
+        verdict = "DISAGREE_WITH_AUTHORITY"
+        review_actions = [
+            f"reconcile soundwire_master: source={src_master_count!r} vs catalog={catalog_count} "
+            f"(union of {terms_used or _T2_SOUNDWIRE_TERMS})"
+        ]
+
+    confidence = "provisional" if at_cap else "high"
+    notes = [
+        f"catalog union count = {catalog_count} across {terms_used or 'no terms'}; "
+        f"source master_count = {src_master_count!r}, present = {src_present!r}"
+    ]
+    if at_cap:
+        notes.append(
+            f"one or more SWI terms returned {_T2_SWI_RESULT_CAP} rows (result cap possibly hit); "
+            "confidence downgraded to provisional"
+        )
+        review_actions.append(
+            "SWI result cap possibly hit; re-run with higher page size to confirm set stability"
+        )
+
+    return [
+        _t2_row(
+            subject=subject,
+            verdict=verdict,
+            source=source_out,
+            authority=authority,
+            confidence=confidence,
+            citations=citations,
+            review_actions=review_actions,
+            notes=notes,
+        )
+    ]
