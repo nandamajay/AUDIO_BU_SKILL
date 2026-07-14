@@ -96,3 +96,8 @@ audio_bu_skill/targets/*/onboarding_report.md
 audio_bu_skill/targets/*/profile.json
 audio_bu_skill/targets/*/similarity_report.json
 audio_bu_skill/targets/*/evidence_inventory.json
+__pycache__/
+*.pyc
+*.pyo
+audio_bu_skill/experiments/ipcat_probe/artifacts/
+prior_art/
