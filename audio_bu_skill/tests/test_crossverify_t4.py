@@ -585,6 +585,63 @@ def test_t4a_empty_source_yields_no_rows() -> None:
     print("PASS: empty/None T4a source → [] (no rows, no crash)")
 
 
+def test_source_fact_accepts_part_role_alias() -> None:
+    """Fix 2 — ``_crossverify_source_facts`` must accept ``part``/``role`` as
+    aliases for ``codec``/``controller`` in T4b bindings. Preference order:
+    primary keys (``codec``/``controller``) win when present; the alias
+    fallback only fires when the primary key is absent.
+
+    End-to-end: run the mapped source through ``track_t4b`` and prove the
+    resulting rows carry the aliased identity in the subject (never
+    ``<unknown_codec>`` / ``<unknown_controller>``).
+    """
+    from orchestrator.main import _crossverify_source_facts
+
+    gc = {
+        "audio_topology": {
+            "codecs": [
+                # (i) alias-only entry — mirrors Nord/Eliza case.generated.py
+                {"part": "TI PCM1681", "role": "DAC (playback, 8-ch)"},
+                # (ii) primary-key entry — must not be shadowed by any alias
+                {"codec": "WSA883x", "controller": "SwrTx"},
+                # (iii) mixed entry — primary key wins over alias
+                {"codec": "PrimaryCodec", "part": "AliasCodec",
+                 "controller": "PrimaryCtrl", "role": "AliasCtrl"},
+            ]
+        }
+    }
+    facts = _crossverify_source_facts(gc)
+    t4b_source = facts["t4b"]
+
+    # The mapper preserves list shape and adds primary keys additively.
+    assert isinstance(t4b_source, list) and len(t4b_source) == 3
+    assert t4b_source[0]["codec"] == "TI PCM1681"
+    assert t4b_source[0]["controller"] == "DAC (playback, 8-ch)"
+    assert t4b_source[1]["codec"] == "WSA883x"
+    assert t4b_source[1]["controller"] == "SwrTx"
+    assert t4b_source[2]["codec"] == "PrimaryCodec", (
+        "primary 'codec' key must not be overwritten by 'part' alias"
+    )
+    assert t4b_source[2]["controller"] == "PrimaryCtrl", (
+        "primary 'controller' key must not be overwritten by 'role' alias"
+    )
+
+    # End-to-end: track_t4b sees the mapped source and never emits <unknown_*>.
+    from orchestrator.reasoning.crossverify import track_t4b
+    snap = _snap(qups=[], cores=[], buses=[])
+    rows = track_t4b(snapshot=snap, source=t4b_source)
+    assert len(rows) == 3
+    subjects = [r.subject for r in rows]
+    assert "TI PCM1681<->DAC (playback, 8-ch)" in subjects
+    assert "WSA883x<->SwrTx" in subjects
+    assert "PrimaryCodec<->PrimaryCtrl" in subjects
+    for s in subjects:
+        assert "<unknown_codec>" not in s and "<unknown_controller>" not in s, (
+            f"alias mapping failed to reach T4b row builder: {s!r}"
+        )
+    print("PASS: T4b part/role alias mapping — primary keys preferred, aliases fill gaps")
+
+
 def main() -> None:
     # WP7 requirement 12 — tests a–m
     # T4a (a–g)
@@ -607,6 +664,7 @@ def main() -> None:
     test_t4a_source_wrapper_keys_unwrapped()
     test_t4a_missing_chip_uses_unavailable_placeholder()
     test_t4a_empty_source_yields_no_rows()
+    test_source_fact_accepts_part_role_alias()
     print("ALL TESTS PASSED")
 
 

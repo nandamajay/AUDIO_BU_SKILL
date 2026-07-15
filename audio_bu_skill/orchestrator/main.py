@@ -887,6 +887,43 @@ def _resolved_chip_for_target(target: str, target_dir: Path, gc: dict) -> str | 
     return None
 
 
+def _t4b_apply_alias_mapping(entry: dict) -> dict:
+    """Fix 2 — accept ``part``/``role`` as aliases for ``codec``/``controller``.
+
+    Preference order: existing ``codec``/``controller`` (primary keys) →
+    ``part``/``role`` (alias fallback). Primary keys, when present, always
+    win; the alias fallback only fires for entries that lack the primary
+    key. Returns a new dict — never mutates the caller's entry.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    out = dict(entry)
+    if not out.get("codec") and out.get("part"):
+        out["codec"] = out["part"]
+    if not out.get("controller") and out.get("role"):
+        out["controller"] = out["role"]
+    return out
+
+
+def _t4b_project_source(t4b: object) -> object:
+    """Fix 2 — apply the part/role alias mapping to a T4b source shape.
+
+    Accepts (a) list of binding dicts, (b) dict wrapping the list under one of
+    the T4b wrapper keys (``codecs`` / ``codec_bindings``), or (c) anything
+    else (returned unchanged so downstream shape-guards handle it).
+    """
+    if isinstance(t4b, list):
+        return [_t4b_apply_alias_mapping(e) for e in t4b]
+    if isinstance(t4b, dict):
+        out = dict(t4b)
+        for key in ("codecs", "codec_bindings"):
+            val = out.get(key)
+            if isinstance(val, list):
+                out[key] = [_t4b_apply_alias_mapping(e) for e in val]
+        return out
+    return t4b
+
+
 def _crossverify_source_facts(gc: dict) -> dict[str, object]:
     """Assemble per-track source-facts from the generated-case profile.
 
@@ -895,14 +932,14 @@ def _crossverify_source_facts(gc: dict) -> dict[str, object]:
       T2 bus    → ``gc["audio_topology"]["soundwire"]``
       T3 counts → pass ``gc`` unchanged
       T4a soc   → ``gc["audio_topology"]["endpoints"]`` or ``soc_endpoints``
-      T4b codec → ``gc["audio_topology"]["codecs"]``
+      T4b codec → ``gc["audio_topology"]["codecs"]`` (part/role aliases mapped)
       T5 DTS    → read ``*.dts``/``*.dtsi`` files under ``targets/<t>/dts/``
     """
     topology = (gc.get("audio_topology") if isinstance(gc, dict) else None) or {}
     t1 = topology.get("pinmux") or gc.get("audio_pins") or {}
     t2 = topology.get("soundwire") or {}
     t4a = topology.get("endpoints") or gc.get("soc_endpoints") or {}
-    t4b = topology.get("codecs") or {}
+    t4b = _t4b_project_source(topology.get("codecs") or {})
     return {"t1": t1, "t2": t2, "t4a": t4a, "t4b": t4b}
 
 
