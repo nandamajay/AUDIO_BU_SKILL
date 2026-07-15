@@ -936,9 +936,9 @@ def _run_crossverify(target: str, target_dir: Path, output: dict) -> None:
     ``crossverify_collector._live_transport()``. Every step is best-effort:
     the caller wraps this in try/except and never propagates failure.
     """
-    profile = output.get("proposed_profile") or {}
-    gc = profile.get("generated_case") if isinstance(profile, dict) else None
+    gc = output.get("generated_case")
     if not isinstance(gc, dict):
+        print("  [crossverify] skipped: no generated_case on output")
         return
     chip = _resolved_chip_for_target(target, target_dir, gc)
     if not chip:
