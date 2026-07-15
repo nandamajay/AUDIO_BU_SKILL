@@ -307,6 +307,50 @@ def test_report_byte_identical_without_cross_verification() -> None:
     print("PASS: (h) report byte-identical without cross_verification key (WP7 baseline preserved)")
 
 
+# ── (i) Fix-1 regression: provenance.chip populates when gc.resolved_chip absent ──
+
+
+def test_provenance_chip_renders_when_present() -> None:
+    """Fix 1 — when ``gc['resolved_chip']`` is absent from the top level (as it
+    is in the live production wiring), the ``chip`` line in the Snapshot
+    provenance sub-section must still render the chip identity by falling back
+    to ``cross_verification.snapshot_provenance.chip`` — which
+    ``_run_crossverify`` now populates additively from the resolved chip.
+
+    Renderer already has the fallback chain
+    ``gc.resolved_chip → provenance.chip → '—'``; this test proves that when
+    only the provenance path is populated (matching production shape) the chip
+    identity appears — not the em-dash placeholder.
+    """
+    # Provenance dict shaped exactly like _run_crossverify's post-Fix-1 output:
+    # collector's provenance keys PLUS a "chip" key injected by main.py.
+    provenance = {**_provenance(), "chip": "nordschleife_2.0"}
+    gc = {
+        # NOTE: no "resolved_chip" at the top level — mirrors live wiring.
+        "cross_verification": {
+            "rows": [_row("T1", "gpio.i2s.0", "MATCH")],
+            "snapshot_provenance": provenance,
+        },
+    }
+    section = _render_crossverify_section(gc)
+    joined = "\n".join(section)
+
+    # The chip identity must appear in the provenance sub-section.
+    assert "nordschleife_2.0" in joined, (
+        "chip identity missing from render — provenance.chip fallback broken"
+    )
+    # And explicitly: the em-dash placeholder must NOT appear on the chip line.
+    chip_line = next((ln for ln in section if ln.lstrip().startswith("- chip")), None)
+    assert chip_line is not None, "no '- chip' line found in provenance sub-section"
+    assert "nordschleife_2.0" in chip_line, (
+        f"chip line does not carry the identity: {chip_line!r}"
+    )
+    assert chip_line.strip() != "- chip : `—`", (
+        "chip line still renders as em-dash placeholder — Fix 1 read-side broken"
+    )
+    print("PASS: (i) provenance.chip fallback renders chip identity (Fix 1)")
+
+
 def main() -> None:
     test_null_guard_no_key_returns_empty()                           # a
     test_null_guard_empty_rows_returns_empty()                       # b
@@ -316,6 +360,7 @@ def main() -> None:
     test_deterministic_output()                                      # f
     test_fixture_end_to_end()                                        # g
     test_report_byte_identical_without_cross_verification()          # h
+    test_provenance_chip_renders_when_present()                      # i (Fix 1)
     print("ALL TESTS PASSED")
 
 

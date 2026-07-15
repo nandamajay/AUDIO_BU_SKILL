@@ -963,7 +963,7 @@ def _run_crossverify(target: str, target_dir: Path, output: dict) -> None:
 
     gc["cross_verification"] = {
         "rows": [row.to_dict() for row in all_rows],
-        "snapshot_provenance": snapshot.get("provenance") or {},
+        "snapshot_provenance": {**(snapshot.get("provenance") or {}), "chip": chip},
     }
     print(f"  [crossverify] chip={chip}  rows={len(all_rows)}")
 
