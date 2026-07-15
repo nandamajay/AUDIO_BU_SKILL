@@ -3,13 +3,32 @@
  * Deterministic. No timestamps.
  */
 
-&i2s_primary {
-	pinctrl-i2s-mclk: mclk;
-	pinctrl-i2s-bclk: bclk;
-	pinctrl-i2s-lrclk: lrclk;
-	pinctrl-i2s-dout: dout;
+&tlmm {
+	i2s8_active: i2s8-active-state {
+		clk-pins {
+			pins = "gpio73";
+			function = "aud_intfc8_clk";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		ws-pins {
+			pins = "gpio74";
+			function = "aud_intfc8_ws";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data-pins {
+			pins = "gpio75";
+			function = "aud_intfc8_data";
+			drive-strength = <8>;
+			bias-disable;
+		};
+	};
 };
 
-&adsp {
-	compatible = "qcom,adsp";
+&remoteproc_adsp {
+	compatible = "qcom,sa8775p-adsp-pas";
+	firmware-name = "qcom/sa8775p/adsp.mbn";
 };
