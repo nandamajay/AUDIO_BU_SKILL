@@ -325,6 +325,55 @@ def test_authority_unavailable_no_source_family_is_single_ncc() -> None:
     )
 
 
+# ── (g2) Empty DTS + authority ok → NCC(revision_not_pinned), empty-DTS note ─
+
+
+def test_empty_dts_authority_ok_is_revision_not_pinned_ncc() -> None:
+    """Fix 3 — when authority is present but the target provided NO DTS files,
+    T5 must still emit a single NCC row so Nord (which has DTS but no pin) and
+    Eliza (which has no DTS at all) both surface a T5 verdict in the report.
+
+    Empty DTS lands in the ``revision_not_pinned`` bucket — semantically:
+    without a DTS you cannot pin a revision. The row's ``notes`` distinguish
+    the empty-DTS case ("no DTS files were provided") from the populated-but-
+    unpinned case ("declares neither qcom,board-id nor qcom,msm-id").
+
+    Donor rules cannot fire against empty text, so the row count stays at 1.
+    """
+    # dts=None simulates the "no DTS files provided" case; dts="" is the
+    # equivalent explicit-empty case that also passes through _t5_flatten_dts.
+    for empty in (None, ""):
+        rows = track_t5(snapshot=_snap(_chips_ok()), dts=empty, kb=None)
+        assert len(rows) == 1, (
+            f"expected 1 row (revision-anchor NCC), got {len(rows)} for dts={empty!r}: "
+            f"{[(r.subject, r.verdict) for r in rows]}"
+        )
+        row = rows[0]
+        assert row.track == "T5"
+        assert row.subject == "dts.revision_anchor"
+        assert row.verdict == "NOT_CROSS_CHECKABLE"
+        assert row.coverage_gap_reason == "revision_not_pinned"
+        assert row.warning is False
+        assert row.confidence == "none"
+        # authority is IPCAT_DIRECT (chips_list_chips was ok) — the row still
+        # cites the target chip and the revision-not-pinned meta rule.
+        assert row.authority["strength"] == "IPCAT_DIRECT"
+        assert row.authority["value"]["canonical_family"] == "sa8797p"
+        assert f"chips_list_chips:{NORD_CHIP_NAME}" in row.citations
+        assert (
+            f"kb.rule:{_T5_META_RULES['revision_not_pinned']}" in row.citations
+        ), row.citations
+        # note branch distinguishes empty DTS from populated-but-unpinned
+        assert any("no DTS files were provided" in n for n in row.notes), (
+            f"expected empty-DTS note, got notes={row.notes!r}"
+        )
+        # and the populated-but-unpinned note must NOT appear here
+        assert not any(
+            "declares neither qcom,board-id nor qcom,msm-id" in n for n in row.notes
+        ), row.notes
+    print("PASS: empty DTS + authority ok → NCC(revision_not_pinned), empty-DTS note")
+
+
 # ── (h) Multi-file DTS list is concatenated ────────────────────────────────
 
 
@@ -381,7 +430,7 @@ def test_deterministic_across_calls() -> None:
 
 
 def main() -> None:
-    # WP6 requirement 9 — tests a–i
+    # WP6 requirement 9 — tests a–i, plus g2 (Fix 3)
     test_nord_donor_compatible_leak_is_disagree_high()               # a
     test_nord_donor_firmware_leak_is_disagree_high()                 # b
     test_nord_donor_power_domain_leak_is_disagree_high()             # c
@@ -389,6 +438,7 @@ def main() -> None:
     test_valid_revision_pin_and_no_donor_is_empty()                  # e
     test_authority_unavailable_source_family_present_donor_leaks_medium()  # f
     test_authority_unavailable_no_source_family_is_single_ncc()      # g
+    test_empty_dts_authority_ok_is_revision_not_pinned_ncc()         # g2 (Fix 3)
     test_multi_file_dts_list_concatenation()                         # h
     test_deterministic_across_calls()                                # i
     print("ALL TESTS PASSED")

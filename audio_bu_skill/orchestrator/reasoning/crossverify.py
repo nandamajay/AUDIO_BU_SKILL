@@ -1337,8 +1337,10 @@ def track_t5(
            (they are the target's own namespace, not a leak);
          * if no donor matches and DTS has no ``qcom,board-id`` /
            ``qcom,msm-id`` → one ``NOT_CROSS_CHECKABLE`` row
-           (revision_not_pinned, confidence=none). The revision-anchor row
-           is emitted alongside any donor rows when both fire.
+           (revision_not_pinned, confidence=none). Empty DTS input also
+           lands here (revision cannot be pinned when no DTS was provided);
+           the row's ``notes`` distinguish the two cases. The revision-
+           anchor row is emitted alongside any donor rows when both fire.
 
       2. ``chips_list_chips`` unavailable, and ``dts`` carries a
          source-declared family key:
@@ -1391,9 +1393,10 @@ def track_t5(
                 )
             )
         # Revision-anchor sweep — one NCC row iff DTS declares neither pin.
-        # We only emit this row when there IS DTS text to check; empty DTS
-        # input returns [] (nothing to check).
-        if dts_text and not _t5_has_revision_pin(dts_text):
+        # Emitted whenever the revision cannot be pinned; the note branches
+        # so an empty DTS (no files provided) is distinguishable in the row's
+        # notes from a populated-but-unpinned DTS.
+        if not _t5_has_revision_pin(dts_text):
             rows.append(
                 _t5_row(
                     subject=_T5_SUBJECT_REVISION,
@@ -1409,10 +1412,17 @@ def track_t5(
                         "add qcom,board-id and/or qcom,msm-id to pin this DTS "
                         "to a specific chip revision"
                     ],
-                    notes=[
-                        "DTS declares neither qcom,board-id nor qcom,msm-id; "
-                        "revision cannot be cross-checked"
-                    ],
+                    notes=(
+                        [
+                            "DTS declares neither qcom,board-id nor qcom,msm-id; "
+                            "revision cannot be cross-checked"
+                        ]
+                        if dts_text
+                        else [
+                            "no DTS files were provided by the target; "
+                            "revision cannot be pinned or cross-checked"
+                        ]
+                    ),
                 )
             )
         return rows
@@ -1456,7 +1466,7 @@ def track_t5(
                     ],
                 )
             )
-        if dts_text and not _t5_has_revision_pin(dts_text):
+        if not _t5_has_revision_pin(dts_text):
             rows.append(
                 _t5_row(
                     subject=_T5_SUBJECT_REVISION,
@@ -1472,10 +1482,17 @@ def track_t5(
                         "add qcom,board-id and/or qcom,msm-id to pin this DTS "
                         "to a specific chip revision"
                     ],
-                    notes=[
-                        "DTS declares neither qcom,board-id nor qcom,msm-id; "
-                        "revision cannot be cross-checked"
-                    ],
+                    notes=(
+                        [
+                            "DTS declares neither qcom,board-id nor qcom,msm-id; "
+                            "revision cannot be cross-checked"
+                        ]
+                        if dts_text
+                        else [
+                            "no DTS files were provided by the target; "
+                            "revision cannot be pinned or cross-checked"
+                        ]
+                    ),
                 )
             )
         return rows
