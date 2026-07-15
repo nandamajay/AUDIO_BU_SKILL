@@ -499,6 +499,15 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
             raise SystemExit(1) from cause
         raise
 
+    # ── Phase-2A WP8 — Schematic ↔ IPCAT Cross-Verification wiring ───────────
+    # Runs only when the chip is RESOLVED (via phase1b_resolution.json or the
+    # profile's ``resolved_chip`` field). Silent try/except: this is diagnostic
+    # only — must never break onboarding. No timestamps, no random ordering.
+    try:
+        _run_crossverify(target, target_dir, output)
+    except Exception as exc:  # noqa: BLE001 — diagnostic never propagates
+        print(f"  [crossverify] skipped: {type(exc).__name__}: {exc}")
+
     _write_onboarding_artifacts(target_dir, output)
     _record_onboarding_artifacts(target=target, run_id=run_id, attempt=attempt,
                                   kernel_source=kernel_source, output=output, orchestrator=orchestrator)
@@ -842,6 +851,123 @@ _CARDINALITY_VERDICT_GLYPH: dict[str, str] = {
 }
 
 
+# ── Phase-2A WP8 — Schematic ↔ IPCAT Cross-Verification renderer ────────────
+_CROSSVERIFY_TRACK_ORDER: tuple[str, ...] = ("T1", "T2", "T3", "T4a", "T4b", "T5")
+_CROSSVERIFY_VERDICT_ORDER: tuple[str, ...] = (
+    "MATCH",
+    "PARTIAL_MATCH",
+    "DISAGREE_WITH_AUTHORITY",
+    "NOT_CROSS_CHECKABLE",
+    "REVIEW_REQUIRED",
+)
+
+
+def _resolved_chip_for_target(target: str, target_dir: Path, gc: dict) -> str | None:
+    """Return the resolved chip alias/id for cross-verification, or None.
+
+    Priority (WP8): (1) ``targets/<t>/phase1b_resolution.json`` if present with
+    a non-empty ``resolved_chip`` field; (2) ``gc["resolved_chip"]`` on the
+    profile. Any I/O error is treated as "not resolved" — the caller silently
+    skips cross-verification in that case.
+    """
+    p1b = target_dir / "phase1b_resolution.json"
+    if p1b.is_file():
+        try:
+            data = json.loads(p1b.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            chip = data.get("resolved_chip")
+            if isinstance(chip, str) and chip:
+                return chip
+    if isinstance(gc, dict):
+        chip = gc.get("resolved_chip")
+        if isinstance(chip, str) and chip:
+            return chip
+    return None
+
+
+def _crossverify_source_facts(gc: dict) -> dict[str, object]:
+    """Assemble per-track source-facts from the generated-case profile.
+
+    Mapping (WP8 requirement):
+      T1 GPIO   → ``gc["audio_topology"]["pinmux"]`` or profile ``audio_pins``
+      T2 bus    → ``gc["audio_topology"]["soundwire"]``
+      T3 counts → pass ``gc`` unchanged
+      T4a soc   → ``gc["audio_topology"]["endpoints"]`` or ``soc_endpoints``
+      T4b codec → ``gc["audio_topology"]["codecs"]``
+      T5 DTS    → read ``*.dts``/``*.dtsi`` files under ``targets/<t>/dts/``
+    """
+    topology = (gc.get("audio_topology") if isinstance(gc, dict) else None) or {}
+    t1 = topology.get("pinmux") or gc.get("audio_pins") or {}
+    t2 = topology.get("soundwire") or {}
+    t4a = topology.get("endpoints") or gc.get("soc_endpoints") or {}
+    t4b = topology.get("codecs") or {}
+    return {"t1": t1, "t2": t2, "t4a": t4a, "t4b": t4b}
+
+
+def _load_dts_files(target_dir: Path) -> list[dict[str, str]]:
+    """Load ``*.dts`` / ``*.dtsi`` under ``targets/<t>/dts/`` for track T5.
+
+    Returns an empty list if the directory does not exist. Files are read once
+    each, sorted by path for determinism, and returned as ``[{name, text}, …]``.
+    Any per-file OSError is silently skipped — T5 will treat missing DTS as
+    NCC(revision_not_pinned) or authority_out_of_scope by itself.
+    """
+    dts_dir = target_dir / "dts"
+    if not dts_dir.is_dir():
+        return []
+    entries: list[dict[str, str]] = []
+    paths = sorted(list(dts_dir.rglob("*.dts")) + list(dts_dir.rglob("*.dtsi")))
+    for p in paths:
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        entries.append({"name": str(p.relative_to(target_dir)), "text": text})
+    return entries
+
+
+def _run_crossverify(target: str, target_dir: Path, output: dict) -> None:
+    """Phase-2A WP8 orchestrator wiring — six-track cross-verification.
+
+    Only runs when the chip is RESOLVED (Phase-1B artifact OR profile). Uses
+    the read-only, TLS-verified transport built by
+    ``crossverify_collector._live_transport()``. Every step is best-effort:
+    the caller wraps this in try/except and never propagates failure.
+    """
+    profile = output.get("proposed_profile") or {}
+    gc = profile.get("generated_case") if isinstance(profile, dict) else None
+    if not isinstance(gc, dict):
+        return
+    chip = _resolved_chip_for_target(target, target_dir, gc)
+    if not chip:
+        print("  [crossverify] skipped: chip not resolved (no phase1b_resolution.json)")
+        return
+
+    from orchestrator.reasoning import crossverify
+    from orchestrator.runners import crossverify_collector
+
+    transport = crossverify_collector._live_transport()
+    snapshot = crossverify_collector.collect_snapshot(chip, transport=transport)
+    facts = _crossverify_source_facts(gc)
+    dts = _load_dts_files(target_dir)
+
+    all_rows: list = []
+    all_rows += list(crossverify.track_t1(snapshot=snapshot, source=facts["t1"]) or [])
+    all_rows += list(crossverify.track_t2(snapshot=snapshot, source=facts["t2"]) or [])
+    all_rows += list(crossverify.track_t3(snapshot=snapshot, gc=gc) or [])
+    all_rows += list(crossverify.track_t4a(snapshot=snapshot, source=facts["t4a"]) or [])
+    all_rows += list(crossverify.track_t4b(snapshot=snapshot, source=facts["t4b"]) or [])
+    all_rows += list(crossverify.track_t5(snapshot=snapshot, dts=dts) or [])
+
+    gc["cross_verification"] = {
+        "rows": [row.to_dict() for row in all_rows],
+        "snapshot_provenance": snapshot.get("provenance") or {},
+    }
+    print(f"  [crossverify] chip={chip}  rows={len(all_rows)}")
+
+
 def _render_cardinality_section(gc: dict) -> list[str]:
     """Track C / WP-C: per-element-class cardinality cross-check rendered as an
     additive report section. Diagnostic-only — no onboarding decision, promotion,
@@ -886,6 +1012,123 @@ def _render_cardinality_section(gc: dict) -> list[str]:
         lines.append(
             f"| {row['element_class']} | {counts_str} | {verdict} | {rule} | {notes_str} |"
         )
+    lines.append("")
+    return lines
+
+
+def _render_crossverify_section(gc: dict) -> list[str]:
+    """Phase-2A WP8: Schematic ↔ IPCAT Cross-Verification section (additive).
+
+    Renders the six-track verification result attached by the WP8 orchestrator
+    wiring at ``gc["cross_verification"]`` (a dict with ``rows`` and
+    ``snapshot_provenance``). Mirrors ``_render_cardinality_section``:
+    null-guarded, list-of-strings return, byte-unchanged report when there are
+    no rows. Pure — no I/O, no timestamps; identical input → identical output.
+    """
+    if not gc:
+        return []
+    cv = gc.get("cross_verification")
+    if not isinstance(cv, dict):
+        return []
+    rows = cv.get("rows") or []
+    if not rows:
+        return []
+
+    provenance = cv.get("snapshot_provenance") or {}
+    lines: list[str] = [
+        "",
+        "## Schematic ↔ IPCAT Cross-Verification",
+        "",
+        "Six-track cross-verification between the schematic/design-side facts and "
+        "the IPCAT authority. **Diagnostic only** — does not change onboarding "
+        "decisions or generated case content. Tracks: T1 GPIO, T2 SoundWire bus, "
+        "T3 element counts, T4a SoC endpoint, T4b codec binding (permanent OOS), "
+        "T5 DTS consistency.",
+        "",
+        "### Snapshot provenance",
+        "",
+    ]
+    # Deterministic sub-header — one line per key, fixed order (chip / tls /
+    # readonly_tools / gpio_map). Missing keys render as "—".
+    chip = gc.get("resolved_chip") or provenance.get("chip") or "—"
+    tls = provenance.get("tls")
+    if isinstance(tls, dict):
+        tls_str = f"verify={tls.get('verify')}, ssl_cert_file={tls.get('ssl_cert_file')}"
+    else:
+        tls_str = "—"
+    readonly_tools = provenance.get("readonly_tools")
+    if isinstance(readonly_tools, (list, tuple)):
+        readonly_str = ", ".join(str(t) for t in readonly_tools) or "—"
+    else:
+        readonly_str = "—"
+    gpio_map = provenance.get("gpio_map")
+    if isinstance(gpio_map, dict):
+        gpio_str = f"id={gpio_map.get('id')}, release={gpio_map.get('release')}"
+    else:
+        gpio_str = "—"
+    lines += [
+        f"- chip           : `{chip}`",
+        f"- tls            : {tls_str}",
+        f"- readonly_tools : {readonly_str}",
+        f"- gpio_map       : {gpio_str}",
+    ]
+
+    # Verdict summary — one line per verdict kind, only when count > 0.
+    verdict_counts: dict[str, int] = {v: 0 for v in _CROSSVERIFY_VERDICT_ORDER}
+    for row in rows:
+        v = row.get("verdict")
+        if v in verdict_counts:
+            verdict_counts[v] += 1
+    if any(n > 0 for n in verdict_counts.values()):
+        lines += ["", "### Verdict summary", ""]
+        for v in _CROSSVERIFY_VERDICT_ORDER:
+            n = verdict_counts[v]
+            if n > 0:
+                lines.append(f"- {v}: {n}")
+
+    # Row table grouped by track T1 → T2 → T3 → T4a → T4b → T5; rows sorted by
+    # subject within each track for determinism.
+    lines += [
+        "",
+        "### Rows",
+        "",
+        "| track | subject | verdict | confidence | warning |",
+        "|-------|---------|---------|------------|---------|",
+    ]
+    by_track: dict[str, list[dict]] = {t: [] for t in _CROSSVERIFY_TRACK_ORDER}
+    for row in rows:
+        t = row.get("track")
+        if t in by_track:
+            by_track[t].append(row)
+    for track in _CROSSVERIFY_TRACK_ORDER:
+        track_rows = sorted(by_track[track], key=lambda r: str(r.get("subject") or ""))
+        for row in track_rows:
+            subject = row.get("subject") or "—"
+            verdict = row.get("verdict") or "—"
+            confidence = row.get("confidence") or "—"
+            warning = "⚠️" if row.get("warning") else ""
+            lines.append(f"| {track} | {subject} | {verdict} | {confidence} | {warning} |")
+
+    # Reviewer worklist — rows where warning=True OR verdict==REVIEW_REQUIRED.
+    worklist = [
+        row for row in rows
+        if row.get("warning") is True or row.get("verdict") == "REVIEW_REQUIRED"
+    ]
+    if worklist:
+        # Sort by (track order, subject) for determinism.
+        track_idx = {t: i for i, t in enumerate(_CROSSVERIFY_TRACK_ORDER)}
+        worklist.sort(key=lambda r: (
+            track_idx.get(r.get("track"), len(_CROSSVERIFY_TRACK_ORDER)),
+            str(r.get("subject") or ""),
+        ))
+        lines += ["", "### Reviewer worklist", ""]
+        for row in worklist:
+            actions = row.get("review_actions") or []
+            first_action = actions[0] if actions else "—"
+            lines.append(
+                f"- **{row.get('track')} / {row.get('subject')}** "
+                f"({row.get('verdict')}): {first_action}"
+            )
     lines.append("")
     return lines
 
@@ -971,6 +1214,7 @@ def _render_onboarding_report(output: dict) -> str:
     lines += _render_ipcat_findings_section(gc)
     lines += _render_confidence_ledger(gc)
     lines += _render_cardinality_section(gc)
+    lines += _render_crossverify_section(gc)
 
     lines += [
         "",

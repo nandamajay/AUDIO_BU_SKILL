@@ -1,0 +1,36 @@
+
+## Schematic ↔ IPCAT Cross-Verification
+
+Six-track cross-verification between the schematic/design-side facts and the IPCAT authority. **Diagnostic only** — does not change onboarding decisions or generated case content. Tracks: T1 GPIO, T2 SoundWire bus, T3 element counts, T4a SoC endpoint, T4b codec binding (permanent OOS), T5 DTS consistency.
+
+### Snapshot provenance
+
+- chip           : `nordschleife_2.0`
+- tls            : verify=True, ssl_cert_file=/etc/ssl/certs/ca-certificates.crt
+- readonly_tools : chips_list_chips, gpio_list_gpios_from_map, swi_search_swi
+- gpio_map       : id=42, release=nord-1.0
+
+### Verdict summary
+
+- MATCH: 2
+- PARTIAL_MATCH: 1
+- DISAGREE_WITH_AUTHORITY: 1
+- NOT_CROSS_CHECKABLE: 1
+- REVIEW_REQUIRED: 1
+
+### Rows
+
+| track | subject | verdict | confidence | warning |
+|-------|---------|---------|------------|---------|
+| T1 | gpio.i2s.mclk | MATCH | high |  |
+| T2 | swr.mstr.tx | DISAGREE_WITH_AUTHORITY | high | ⚠️ |
+| T3 | clocks.count | NOT_CROSS_CHECKABLE | none |  |
+| T4a | qup.se3 | MATCH | high |  |
+| T4b | codec.wsa883x | REVIEW_REQUIRED | none | ⚠️ |
+| T5 | dts.firmware | PARTIAL_MATCH | medium |  |
+
+### Reviewer worklist
+
+- **T2 / swr.mstr.tx** (DISAGREE_WITH_AUTHORITY): confirm swr.mstr.tx bus name against IPCAT swi enumeration
+- **T4b / codec.wsa883x** (REVIEW_REQUIRED): confirm codec DAI-link binding with schematic
+
