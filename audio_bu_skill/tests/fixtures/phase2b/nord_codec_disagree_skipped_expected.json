@@ -1,0 +1,9 @@
+{
+  "artifact_class": "codec_stub",
+  "gating_rows": [
+    "T4b.codec.pcm1681"
+  ],
+  "kind": "GeneratorSkipped",
+  "reason": "codec_binding_disagreement",
+  "subject": "codec_stub"
+}

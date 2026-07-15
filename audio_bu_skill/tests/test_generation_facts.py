@@ -55,19 +55,44 @@ _PHASE2B_FIXTURE = _AUDIO_BU_ROOT / "tests" / "fixtures" / "phase2b" / "nord_tru
 # The regression anchor per §WP2(e). If you regenerated the fixture legitimately
 # (via ``tests/regenerate/regenerate_phase2b_fixtures.py --wp 2``), update this
 # constant AND the fixture in the same commit; both signals must agree.
-_EXPECTED_FIXTURE_SHA256 = "50a88974fb1587d0cca371b2494677ee29b9c7e95f5f568b32b729674bbb1286"
+_EXPECTED_FIXTURE_SHA256 = "889f3bd9a8267c8cdc51df0fbfdc1059ae44e3420567f35e8a8230ec3a24ca1c"
 
 
 # ── Fixture rehydration helper ──────────────────────────────────────────────
 
 
-def _rehydrate_phase2a_rows() -> list[VerificationRow]:
-    """Load ``expected_rows.json`` as ``list[VerificationRow]``.
+#: Nord IQ-10 codec fan-out for the T4b advisory row.
+#:
+#: The Phase-2A source fixture at ``tests/fixtures/phase2a/expected_rows.json``
+#: emits a single T4b row on the donor's ``codec.wsa883x`` subject — Eliza's
+#: codec, not Nord's. The Nord IQ-10 audio path routes to two board codecs:
+#: ADI ADAU1979 (ADC) and TI PCM1681 (DAC), both on ``&i2c18``. Neither has an
+#: IPCAT authority (T4b binding is out-of-scope per §3.7), so both are the same
+#: shape as the donor row: NCC + authority_out_of_scope + warning=true.
+#:
+#: The rehydrator fans the single donor row out into these two Nord-truth
+#: rows so ``nord_trusted_facts.json`` reflects Nord's actual codec inventory.
+_NORD_T4B_CODEC_SUBJECTS: tuple[str, ...] = ("codec.adau1979", "codec.pcm1681")
 
-    Corrects a single Phase-2A fixture under-strictness (T4b row with
-    ``verdict=REVIEW_REQUIRED`` + ``coverage_gap_reason=authority_out_of_scope``,
-    which the model rejects; spec §3.7 requires ``NCC + authority_out_of_scope``
-    for T4b advisory rows). See module docstring for the rationale.
+
+def _rehydrate_phase2a_rows() -> list[VerificationRow]:
+    """Load ``expected_rows.json`` as ``list[VerificationRow]`` with Nord codec fan-out.
+
+    Two corrections happen here — both driven by the "no-Phase-2A-touch"
+    constraint, see module docstring:
+
+      1. The Phase-2A T4b row's ``verdict=REVIEW_REQUIRED`` +
+         ``coverage_gap_reason=authority_out_of_scope`` combination is rejected
+         by the WP1a model invariant (``coverage_gap_reason ⇔ NOT_CROSS_CHECKABLE``).
+         Spec §3.7 requires ``NCC + authority_out_of_scope`` for T4b advisory
+         rows; we swap the verdict to ``NOT_CROSS_CHECKABLE`` at rehydrate
+         time.
+      2. The donor's ``codec.wsa883x`` subject is Eliza-truth, not Nord-truth.
+         Nord IQ-10 wires two codecs on ``&i2c18`` (ADAU1979 ADC + PCM1681 DAC),
+         so we fan the single donor row out into two Nord-truth rows keyed by
+         ``_NORD_T4B_CODEC_SUBJECTS``. Both keep the same shape (NCC, authority
+         UNAVAILABLE, ``rule_id=t4b.codec_binding.out_of_scope``,
+         ``review_actions=["confirm codec DAI-link binding with schematic"]``).
     """
     raw = json.loads(_PHASE2A_FIXTURE.read_text(encoding="utf-8"))
     rows: list[VerificationRow] = []
@@ -77,8 +102,13 @@ def _rehydrate_phase2a_rows() -> list[VerificationRow]:
             and r.get("verdict") == "REVIEW_REQUIRED"
             and r.get("coverage_gap_reason")
         ):
-            r = dict(r)
-            r["verdict"] = "NOT_CROSS_CHECKABLE"
+            base = dict(r)
+            base["verdict"] = "NOT_CROSS_CHECKABLE"
+            for nord_subject in _NORD_T4B_CODEC_SUBJECTS:
+                nord_row = dict(base)
+                nord_row["subject"] = nord_subject
+                rows.append(VerificationRow(**nord_row))
+            continue
         rows.append(VerificationRow(**r))
     return rows
 
@@ -127,7 +157,7 @@ def test_empty_rows_yields_empty_facts() -> None:
     assert d1 == d2 == {"rows_by_track_subject": {}}
     # is_open on empty TrustedFacts fails closed for every query
     assert tf.is_open("T5", "dts.firmware") is False
-    assert tf.is_open("T4b", "codec.wsa883x") is False
+    assert tf.is_open("T4b", "codec.pcm1681") is False
     print("PASS: (a) empty rows → empty TrustedFacts, byte-stable, fails closed")
 
 
@@ -149,7 +179,10 @@ def test_phase2a_fixture_projects_to_expected_facts() -> None:
     — because downstream WPs' fixture chains compare byte contents.
     """
     rows = _rehydrate_phase2a_rows()
-    assert len(rows) == 6, f"Phase-2A fixture must have 6 rows (see spec §WP2); got {len(rows)}"
+    assert len(rows) == 7, (
+        f"Phase-2A fixture must yield 7 rows after Nord codec fan-out "
+        f"(5 non-T4b + 2 Nord codec rows from the single donor T4b row); got {len(rows)}"
+    )
     tf = project_facts(rows)
     got_payload = json.dumps(tf.to_dict(), sort_keys=True, indent=2) + "\n"
     expected_payload = _PHASE2B_FIXTURE.read_text(encoding="utf-8")
@@ -167,7 +200,8 @@ def test_phase2a_fixture_projects_to_expected_facts() -> None:
         "T2.swr.mstr.tx",
         "T3.clocks.count",
         "T4a.qup.se3",
-        "T4b.codec.wsa883x",
+        "T4b.codec.adau1979",
+        "T4b.codec.pcm1681",
         "T5.dts.firmware",
     }
     assert keys == expected_keys, f"projection dropped or renamed keys: {keys ^ expected_keys!r}"

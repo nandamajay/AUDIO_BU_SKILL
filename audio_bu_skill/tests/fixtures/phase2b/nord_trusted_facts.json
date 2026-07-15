@@ -74,7 +74,7 @@
       "verdict": "MATCH",
       "warning": false
     },
-    "T4b.codec.wsa883x": {
+    "T4b.codec.adau1979": {
       "authority": {
         "origin": "none",
         "strength": "UNAVAILABLE",
@@ -89,7 +89,27 @@
       ],
       "rule_id": "t4b.codec_binding.out_of_scope",
       "source": {},
-      "subject": "codec.wsa883x",
+      "subject": "codec.adau1979",
+      "track": "T4b",
+      "verdict": "NOT_CROSS_CHECKABLE",
+      "warning": true
+    },
+    "T4b.codec.pcm1681": {
+      "authority": {
+        "origin": "none",
+        "strength": "UNAVAILABLE",
+        "value": null
+      },
+      "citations": [],
+      "confidence": "none",
+      "coverage_gap_reason": "authority_out_of_scope",
+      "notes": [],
+      "review_actions": [
+        "confirm codec DAI-link binding with schematic"
+      ],
+      "rule_id": "t4b.codec_binding.out_of_scope",
+      "source": {},
+      "subject": "codec.pcm1681",
       "track": "T4b",
       "verdict": "NOT_CROSS_CHECKABLE",
       "warning": true
