@@ -89,3 +89,4 @@ audio_bu_skill/targets/*/evidence_inventory.json
 *.pyc
 audio_bu_skill/experiments/ipcat_probe/artifacts/
 prior_art/
+generated/
