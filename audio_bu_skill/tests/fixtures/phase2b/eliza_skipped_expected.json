@@ -1,0 +1,9 @@
+{
+  "artifact_class": "dt_scaffolding",
+  "gating_rows": [
+    "T5.dts.firmware"
+  ],
+  "kind": "GeneratorSkipped",
+  "reason": "gating_row_partial_match_donor_residue",
+  "subject": "dt_scaffolding"
+}
