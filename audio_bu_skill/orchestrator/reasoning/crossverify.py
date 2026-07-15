@@ -1502,3 +1502,596 @@ def track_t5(
             ],
         )
     ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WP7 — Track T4a (SoC Endpoint Validation) + Track T4b (Codec Binding, OOS)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# T4a validates design-side SoC-endpoint claims (QUP engines, named cores,
+# audio buses) against IPCAT's live catalog (``chipio_get_qups``,
+# ``cores_list_core_instances``, ``buses_list_buses``). It is DIRECT for QUP
+# and core kinds, INDIRECT for bus kind (fabric enumeration only).
+#
+# T4b is diagnostic-only: IPCAT does NOT hold codec parts, I2S/TDM/PCM DAI-
+# links, or codec↔controller bindings — those are permanent board/schematic
+# facts. Every T4b row is NCC/authority_out_of_scope with confidence=none and
+# warning=False. T4b rows must NOT cite any IPCAT tool; the KB rule id is the
+# only citation on the row.
+
+from orchestrator.reasoning.crossverify_config import (
+    T4A_ENDPOINT_KINDS as _T4A_ENDPOINT_KINDS,
+    T4B_OOS_REASON as _T4B_OOS_REASON,
+    T4B_RULE_ID as _T4B_RULE_ID,
+)
+
+
+# Per-authority origin tokens used inside T4a rows' authority.origin and
+# citations. Kept as module-level constants so tests can import them without
+# reaching into the KB table (parity with _T5_AUTH_ORIGIN).
+_T4A_AUTH_QUP_ORIGIN: str = str(_T4A_ENDPOINT_KINDS["qup"]["auth_origin"])
+_T4A_AUTH_CORE_ORIGIN: str = str(_T4A_ENDPOINT_KINDS["core"]["auth_origin"])
+_T4A_AUTH_BUS_ORIGIN: str = str(_T4A_ENDPOINT_KINDS["bus"]["auth_origin"])
+
+# Wrapper keys that _t4a_flatten_source / _t4b_flatten_source accept on the
+# incoming source dict. Preserves ordering — first match wins.
+_T4A_SOURCE_WRAPPER_KEYS: tuple[str, ...] = (
+    "endpoints",
+    "soc_endpoints",
+    "audio_endpoints",
+)
+_T4B_SOURCE_WRAPPER_KEYS: tuple[str, ...] = (
+    "codecs",
+    "codec_bindings",
+)
+
+
+# ── T4a helpers ────────────────────────────────────────────────────────────
+
+
+def _t4a_flatten_source(source: Any) -> list[dict[str, Any]]:
+    """Return the list of endpoint claims from ``source``.
+
+    Accepts (a) a list of endpoint dicts, (b) a dict wrapping the list under
+    one of ``endpoints`` / ``soc_endpoints`` / ``audio_endpoints``, or (c)
+    ``None`` / empty. Any non-dict entry inside the list is dropped.
+    """
+    if source is None:
+        return []
+    if isinstance(source, list):
+        return [item for item in source if isinstance(item, dict)]
+    if isinstance(source, dict):
+        for key in _T4A_SOURCE_WRAPPER_KEYS:
+            maybe = source.get(key)
+            if isinstance(maybe, list):
+                return [item for item in maybe if isinstance(item, dict)]
+    return []
+
+
+def _t4a_chip_name(snapshot: dict[str, Any]) -> str:
+    """Chip alias for T4a citations (``<authority_tool>:<chip>``).
+
+    Falls back to ``"<unavailable>"`` if the snapshot omits ``chip``. Used
+    purely for citation phrasing — the chip identifier is never re-validated
+    here (T5 owns silicon identity).
+    """
+    chip = snapshot.get("chip")
+    if isinstance(chip, str) and chip.strip():
+        return chip
+    return "<unavailable>"
+
+
+def _t4a_tool_entry(snapshot: dict[str, Any], tool: str) -> dict[str, Any] | None:
+    """Return the tool entry ``snapshot["tools"][<tool>]`` if it's a dict, else None."""
+    tools = snapshot.get("tools") or {}
+    entry = tools.get(tool)
+    return entry if isinstance(entry, dict) else None
+
+
+def _t4a_authority_ok(entry: dict[str, Any] | None) -> bool:
+    """True iff the tool entry is present AND status == "ok"."""
+    return bool(entry) and entry.get("status") == "ok"
+
+
+def _t4a_authority_rows(entry: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Extract the row list from a T4a authority tool payload.
+
+    Accepts either a list payload or a dict payload wrapping the list under
+    ``results`` / ``items`` / ``qups`` / ``cores`` / ``buses``. Non-dict
+    entries in the list are dropped.
+    """
+    if not _t4a_authority_ok(entry):
+        return []
+    payload = entry.get("payload") if entry else None
+    rows: list[Any] = []
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        for key in ("results", "items", "qups", "cores", "buses"):
+            maybe = payload.get(key)
+            if isinstance(maybe, list):
+                rows = maybe
+                break
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _t4a_lookup_qup(
+    rows: list[dict[str, Any]],
+    claim: dict[str, Any],
+) -> tuple[dict[str, Any] | None, bool]:
+    """Locate a QUP row that matches ``claim``.
+
+    Match precedence (all case-insensitive on string keys): ``engine`` >
+    ``se_number`` > ``instance`` > ``group_name``. Returns
+    ``(matched_row_or_None, cap_agrees)`` where ``cap_agrees`` is True unless
+    the claim declared a capability (i2c/uart/spi/i3c) AND the authority row
+    lists a different capability set. If no capability is claimed, cap_agrees
+    is True by default (spec: PARTIAL_MATCH fires only when caps differ).
+    """
+    claim_engine = str(claim.get("engine") or "").strip().lower()
+    claim_se = claim.get("se_number") if claim.get("se_number") is not None else claim.get("se")
+    claim_instance = str(claim.get("instance") or "").strip().lower()
+    claim_group = str(claim.get("group_name") or claim.get("group") or "").strip().lower()
+
+    def _matches(row: dict[str, Any]) -> bool:
+        if claim_engine:
+            row_engine = str(row.get("engine") or row.get("name") or "").strip().lower()
+            if row_engine == claim_engine:
+                return True
+        if claim_se is not None:
+            if row.get("se_number") == claim_se or row.get("se") == claim_se:
+                return True
+        if claim_instance:
+            if str(row.get("instance") or "").strip().lower() == claim_instance:
+                return True
+        if claim_group:
+            row_group = str(row.get("group_name") or row.get("group") or "").strip().lower()
+            if row_group == claim_group:
+                return True
+        return False
+
+    matched: dict[str, Any] | None = None
+    for row in rows:
+        if _matches(row):
+            matched = row
+            break
+    if matched is None:
+        return None, True
+
+    # Capability check — only relevant if the claim declared one.
+    claim_cap = str(claim.get("cap") or claim.get("capability") or "").strip().lower()
+    if not claim_cap:
+        return matched, True
+    caps_flags = _T4A_ENDPOINT_KINDS["qup"].get("capability_flags") or ()
+    # An authority row may expose capabilities as either individual boolean
+    # keys (``i2c: True``) or a list under ``caps`` / ``capabilities``.
+    row_caps: set[str] = set()
+    for flag in caps_flags:
+        val = matched.get(flag)
+        if isinstance(val, bool) and val:
+            row_caps.add(str(flag).lower())
+    for key in ("caps", "capabilities"):
+        maybe = matched.get(key)
+        if isinstance(maybe, list):
+            for c in maybe:
+                if isinstance(c, str):
+                    row_caps.add(c.strip().lower())
+    if not row_caps:
+        # Authority silent on capability — cannot say it disagrees.
+        return matched, True
+    return matched, (claim_cap in row_caps)
+
+
+def _t4a_lookup_core(
+    rows: list[dict[str, Any]],
+    claim: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Locate a core-instance row that matches ``claim`` by ``name`` / ``id`` / ``group_name``."""
+    claim_name = str(claim.get("name") or "").strip().lower()
+    claim_id = claim.get("id")
+    claim_group = str(claim.get("group_name") or claim.get("group") or "").strip().lower()
+    claim_instance = str(claim.get("instance_name") or claim.get("instance") or "").strip().lower()
+
+    for row in rows:
+        row_name = str(row.get("name") or "").strip().lower()
+        row_instance = str(row.get("instance_name") or row.get("instance") or "").strip().lower()
+        if claim_name and (row_name == claim_name or row_instance == claim_name):
+            return row
+        if claim_instance and row_instance == claim_instance:
+            return row
+        if claim_id is not None and row.get("id") == claim_id:
+            return row
+        if claim_group:
+            row_group = str(row.get("group_name") or row.get("group") or "").strip().lower()
+            if row_group and row_group == claim_group:
+                return row
+    return None
+
+
+def _t4a_lookup_bus(
+    rows: list[dict[str, Any]],
+    claim: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Locate a bus row that matches ``claim`` by ``name``."""
+    claim_name = str(claim.get("name") or "").strip().lower()
+    if not claim_name:
+        return None
+    for row in rows:
+        row_name = str(row.get("name") or "").strip().lower()
+        if row_name == claim_name:
+            return row
+    return None
+
+
+def _t4a_subject(claim: dict[str, Any]) -> str:
+    """Build a stable subject string like ``qup:QUPv3_0_SE_5`` for the row."""
+    kind = str(claim.get("kind") or "").strip().lower() or "unknown"
+    label = (
+        claim.get("engine")
+        or claim.get("name")
+        or claim.get("instance")
+        or claim.get("se_number")
+        or claim.get("group_name")
+        or "<unnamed>"
+    )
+    return f"{kind}:{label}"
+
+
+def _t4a_citations(authority_tool: str, chip_name: str, rule_id: str) -> list[str]:
+    """Two-citation tuple every T4a row must carry (WP7 requirement 6)."""
+    return [f"{authority_tool}:{chip_name}", f"kb.rule:{rule_id}"]
+
+
+def _t4a_row(
+    *,
+    subject: str,
+    verdict: str,
+    source: Any,
+    authority: dict[str, Any],
+    confidence: str,
+    coverage_gap_reason: str | None = None,
+    review_actions: list[str] | None = None,
+    citations: list[str],
+    notes: list[str] | None = None,
+) -> VerificationRow:
+    """Small factory around :class:`VerificationRow` for T4a's verdict shapes."""
+    return VerificationRow(
+        track="T4a",
+        subject=subject,
+        verdict=verdict,
+        source=source,
+        authority=authority,
+        confidence=confidence,
+        coverage_gap_reason=coverage_gap_reason,
+        review_actions=list(review_actions or []),
+        citations=list(citations),
+        notes=list(notes or []),
+    )
+
+
+def track_t4a(
+    snapshot: dict[str, Any],
+    source: Any,
+    kb: dict[str, Any] | None = None,
+) -> list[VerificationRow]:
+    """T4a — SoC Endpoint Validation.
+
+    For each design-side endpoint claim (``kind`` in
+    :data:`T4A_ENDPOINT_KINDS`), consult the mapped IPCAT authority tool and
+    emit one :class:`VerificationRow`:
+
+      * design-named endpoint present in authority → MATCH (confidence from
+        the KB table: DIRECT high for qup/core, INDIRECT medium for bus);
+      * QUP endpoint present but claimed capability disagrees with
+        authority-recorded capability → PARTIAL_MATCH (warning=False,
+        confidence=medium);
+      * endpoint not present in the authority's rowset → DISAGREE_WITH_AUTHORITY
+        (warning=True, confidence high — the authority spoke);
+      * authority tool unavailable → NCC(authority_unavailable), confidence=none;
+      * unknown ``kind`` → NCC(authority_out_of_scope) with an unknown-kind note.
+
+    The KB parameter is reserved for future opt-in overrides and is not
+    consulted here (parity with T5).
+    """
+    del kb  # T4a does not consult the KB parameter in this WP
+
+    claims = _t4a_flatten_source(source)
+    if not claims:
+        return []
+
+    chip_name = _t4a_chip_name(snapshot)
+    # Pre-resolve each authority tool once — a single unavailable status
+    # applies to every claim of that kind (avoids re-reading the tool entry
+    # inside the loop).
+    qup_entry = _t4a_tool_entry(snapshot, "chipio_get_qups")
+    core_entry = _t4a_tool_entry(snapshot, "cores_list_core_instances")
+    bus_entry = _t4a_tool_entry(snapshot, "buses_list_buses")
+    qup_rows = _t4a_authority_rows(qup_entry)
+    core_rows = _t4a_authority_rows(core_entry)
+    bus_rows = _t4a_authority_rows(bus_entry)
+
+    rows: list[VerificationRow] = []
+    for claim in claims:
+        kind = str(claim.get("kind") or "").strip().lower()
+        if kind not in _T4A_ENDPOINT_KINDS:
+            rows.append(
+                _t4a_row(
+                    subject=_t4a_subject(claim),
+                    verdict="NOT_CROSS_CHECKABLE",
+                    source=dict(claim),
+                    authority={"strength": "UNAVAILABLE", "origin": "none"},
+                    confidence="none",
+                    coverage_gap_reason="authority_out_of_scope",
+                    citations=[
+                        f"kb.rule:t4a.endpoint.unknown_kind",
+                    ],
+                    review_actions=[
+                        f"endpoint kind {claim.get('kind')!r} is outside T4a's "
+                        f"supported kinds "
+                        f"{sorted(_T4A_ENDPOINT_KINDS)}"
+                    ],
+                    notes=[
+                        f"unknown endpoint kind {claim.get('kind')!r}; T4a will "
+                        "not invent an authority mapping"
+                    ],
+                )
+            )
+            continue
+
+        table = _T4A_ENDPOINT_KINDS[kind]
+        authority_tool = str(table["authority"])
+        auth_origin = str(table["auth_origin"])
+        rule_id = str(table["rule_id"])
+        confidence_on_match = str(table["confidence_on_match"])
+
+        if kind == "qup":
+            entry, auth_rows_here = qup_entry, qup_rows
+        elif kind == "core":
+            entry, auth_rows_here = core_entry, core_rows
+        else:  # kind == "bus"
+            entry, auth_rows_here = bus_entry, bus_rows
+
+        if not _t4a_authority_ok(entry):
+            rows.append(
+                _t4a_row(
+                    subject=_t4a_subject(claim),
+                    verdict="NOT_CROSS_CHECKABLE",
+                    source=dict(claim),
+                    authority={"strength": "UNAVAILABLE", "origin": "none"},
+                    confidence="none",
+                    coverage_gap_reason="authority_unavailable",
+                    citations=_t4a_citations(authority_tool, "<unavailable>", rule_id),
+                    review_actions=[
+                        f"{authority_tool} unavailable; re-run collector or "
+                        f"verify the endpoint against the {authority_tool} "
+                        "catalog directly"
+                    ],
+                    notes=[
+                        f"{authority_tool} status != ok — endpoint "
+                        f"{_t4a_subject(claim)} cannot be cross-checked"
+                    ],
+                )
+            )
+            continue
+
+        # Authority available — dispatch by kind.
+        if kind == "qup":
+            matched, cap_agrees = _t4a_lookup_qup(auth_rows_here, claim)
+            if matched is None:
+                rows.append(
+                    _t4a_row(
+                        subject=_t4a_subject(claim),
+                        verdict="DISAGREE_WITH_AUTHORITY",
+                        source=dict(claim),
+                        authority={
+                            "strength": "IPCAT_DIRECT",
+                            "origin": auth_origin,
+                            "value": {"present": False},
+                        },
+                        confidence="high",
+                        citations=_t4a_citations(authority_tool, chip_name, rule_id),
+                        review_actions=[
+                            f"claimed QUP endpoint not present in "
+                            f"{authority_tool}; verify {_t4a_subject(claim)} "
+                            "against the QUP catalog directly"
+                        ],
+                    )
+                )
+                continue
+            if not cap_agrees:
+                claim_cap = str(claim.get("cap") or claim.get("capability") or "").strip().lower()
+                rows.append(
+                    _t4a_row(
+                        subject=_t4a_subject(claim),
+                        verdict="PARTIAL_MATCH",
+                        source=dict(claim),
+                        authority={
+                            "strength": "IPCAT_DIRECT",
+                            "origin": auth_origin,
+                            "value": dict(matched),
+                        },
+                        confidence="medium",
+                        citations=_t4a_citations(authority_tool, chip_name, rule_id),
+                        review_actions=[
+                            f"QUP {_t4a_subject(claim)} present but claimed "
+                            f"capability {claim_cap!r} disagrees with authority; "
+                            "confirm intended capability against the QUP catalog"
+                        ],
+                    )
+                )
+                continue
+            rows.append(
+                _t4a_row(
+                    subject=_t4a_subject(claim),
+                    verdict="MATCH",
+                    source=dict(claim),
+                    authority={
+                        "strength": "IPCAT_DIRECT",
+                        "origin": auth_origin,
+                        "value": dict(matched),
+                    },
+                    confidence=confidence_on_match,
+                    citations=_t4a_citations(authority_tool, chip_name, rule_id),
+                )
+            )
+            continue
+
+        if kind == "core":
+            matched = _t4a_lookup_core(auth_rows_here, claim)
+            if matched is None:
+                rows.append(
+                    _t4a_row(
+                        subject=_t4a_subject(claim),
+                        verdict="DISAGREE_WITH_AUTHORITY",
+                        source=dict(claim),
+                        authority={
+                            "strength": "IPCAT_DIRECT",
+                            "origin": auth_origin,
+                            "value": {"present": False},
+                        },
+                        confidence="high",
+                        citations=_t4a_citations(authority_tool, chip_name, rule_id),
+                        review_actions=[
+                            f"named core {claim.get('name')!r} not present in "
+                            f"{authority_tool}; verify the core instance "
+                            "against the IPCAT core catalog directly"
+                        ],
+                    )
+                )
+                continue
+            rows.append(
+                _t4a_row(
+                    subject=_t4a_subject(claim),
+                    verdict="MATCH",
+                    source=dict(claim),
+                    authority={
+                        "strength": "IPCAT_DIRECT",
+                        "origin": auth_origin,
+                        "value": dict(matched),
+                    },
+                    confidence=confidence_on_match,
+                    citations=_t4a_citations(authority_tool, chip_name, rule_id),
+                )
+            )
+            continue
+
+        # kind == "bus" — INDIRECT authority (fabric enumeration).
+        matched = _t4a_lookup_bus(auth_rows_here, claim)
+        if matched is None:
+            rows.append(
+                _t4a_row(
+                    subject=_t4a_subject(claim),
+                    verdict="DISAGREE_WITH_AUTHORITY",
+                    source=dict(claim),
+                    authority={
+                        "strength": "IPCAT_DERIVED",
+                        "origin": auth_origin,
+                        "value": {"present": False},
+                    },
+                    confidence="high",
+                    citations=_t4a_citations(authority_tool, chip_name, rule_id),
+                    review_actions=[
+                        f"bus {claim.get('name')!r} not present in "
+                        f"{authority_tool}; verify the bus name against the "
+                        "IPCAT bus catalog directly"
+                    ],
+                    notes=[
+                        "bus authority is INDIRECT — buses_list_buses enumerates "
+                        "the fabric, not the audio endpoint identity"
+                    ],
+                )
+            )
+            continue
+        rows.append(
+            _t4a_row(
+                subject=_t4a_subject(claim),
+                verdict="MATCH",
+                source=dict(claim),
+                authority={
+                    "strength": "IPCAT_DERIVED",
+                    "origin": auth_origin,
+                    "value": dict(matched),
+                },
+                confidence=confidence_on_match,  # medium for bus (INDIRECT)
+                citations=_t4a_citations(authority_tool, chip_name, rule_id),
+                notes=[
+                    "bus authority is INDIRECT — MATCH is at medium confidence "
+                    "since buses_list_buses does not resolve audio-endpoint identity"
+                ],
+            )
+        )
+
+    return rows
+
+
+# ── T4b helpers ────────────────────────────────────────────────────────────
+
+
+def _t4b_flatten_source(source: Any) -> list[dict[str, Any]]:
+    """Return the list of codec-binding claims from ``source``.
+
+    Accepts (a) a list of ``{codec, controller}`` dicts, (b) a dict wrapping
+    the list under one of ``codecs`` / ``codec_bindings``, or (c) ``None`` /
+    empty. Non-dict entries are dropped.
+    """
+    if source is None:
+        return []
+    if isinstance(source, list):
+        return [item for item in source if isinstance(item, dict)]
+    if isinstance(source, dict):
+        for key in _T4B_SOURCE_WRAPPER_KEYS:
+            maybe = source.get(key)
+            if isinstance(maybe, list):
+                return [item for item in maybe if isinstance(item, dict)]
+    return []
+
+
+def _t4b_row(binding: dict[str, Any]) -> VerificationRow:
+    """Build the single NCC(authority_out_of_scope) row for one codec binding.
+
+    Every T4b row: verdict=NOT_CROSS_CHECKABLE, coverage_gap_reason=
+    ``authority_out_of_scope``, confidence=none, warning=False (the
+    NOT_CROSS_CHECKABLE default), authority={strength: UNAVAILABLE,
+    origin: "none"}, and citations = ``["kb.rule:t4b.codec_binding.out_of_scope"]``
+    ONLY — no IPCAT tool is cited from this track.
+    """
+    codec = str(binding.get("codec") or "<unknown_codec>")
+    controller = str(binding.get("controller") or "<unknown_controller>")
+    subject = f"{codec}<->{controller}"
+    return VerificationRow(
+        track="T4b",
+        subject=subject,
+        verdict="NOT_CROSS_CHECKABLE",
+        source=dict(binding),
+        authority={"strength": "UNAVAILABLE", "origin": "none"},
+        confidence="none",
+        coverage_gap_reason=_T4B_OOS_REASON,
+        review_actions=[
+            f"codec<->controller binding is not IPCAT-checkable "
+            f"(board/schematic fact); validate {codec} -> {controller} against "
+            "the schematic/DTS DAI-links directly."
+        ],
+        citations=[f"kb.rule:{_T4B_RULE_ID}"],
+        notes=[
+            "IPCAT does not model codec parts, I2S/TDM/PCM DAI-links, or "
+            "codec-to-controller bindings — permanent architectural boundary"
+        ],
+    )
+
+
+def track_t4b(
+    snapshot: dict[str, Any],
+    source: Any,
+    kb: dict[str, Any] | None = None,
+) -> list[VerificationRow]:
+    """T4b — Codec Binding (structurally OUT OF SCOPE for IPCAT).
+
+    Diagnostic-only track. Every design-side codec binding yields one
+    NCC(authority_out_of_scope) row with confidence=none, warning=False, and
+    citations restricted to ``kb.rule:t4b.codec_binding.out_of_scope`` (no
+    IPCAT tool is ever cited). ``snapshot`` is accepted only for API parity;
+    T4b never reads any snapshot tool entry.
+    """
+    del snapshot, kb  # T4b consults neither the snapshot nor the KB
+    bindings = _t4b_flatten_source(source)
+    return [_t4b_row(b) for b in bindings]

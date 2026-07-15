@@ -77,3 +77,51 @@ T5_META_RULES: dict[str, str] = {
     "silicon_identity":     "t5.meta.silicon.identity",
     "revision_not_pinned":  "t5.meta.revision.pin_required",
 }
+
+
+# ── Track T4 — SoC Endpoint + Codec Binding (WP7) ───────────────────────────
+
+# T4a — recognized SoC-endpoint kinds. Each entry names the IPCAT authority
+# tool the pure core consults, the fields on that tool's payload used to
+# match a design-side claim, the confidence to award on MATCH (DIRECT vs
+# INDIRECT), and the KB rule_id every emitted T4a row must cite.
+#
+# Kinds outside this table trigger NCC(authority_out_of_scope) at the entry
+# point — T4a never invents an authority mapping.
+#
+# Confidence policy (V2 §2/T4a): QUP + core → DIRECT (high on MATCH); bus is
+# only INDIRECT since ``buses_list_buses`` enumerates the fabric, not the
+# audio-endpoint identity → medium on MATCH.
+T4A_ENDPOINT_KINDS: dict[str, dict[str, object]] = {
+    "qup": {
+        "authority":          "chipio_get_qups",
+        "auth_origin":        "ipcat.chipio_get_qups",
+        "match_keys":         ("se_number", "instance", "group_name", "engine"),
+        "capability_flags":   ("i2c", "uart", "spi", "i3c"),
+        "confidence_on_match": "high",
+        "rule_id":             "t4a.endpoint.qup",
+    },
+    "core": {
+        "authority":          "cores_list_core_instances",
+        "auth_origin":        "ipcat.cores_list_core_instances",
+        "match_keys":         ("name", "id", "group_name", "instance_name"),
+        "confidence_on_match": "high",
+        "rule_id":             "t4a.endpoint.core",
+    },
+    "bus": {
+        "authority":          "buses_list_buses",
+        "auth_origin":        "ipcat.buses_list_buses",
+        "match_keys":         ("name",),
+        "confidence_on_match": "medium",  # INDIRECT — fabric enumeration only
+        "rule_id":             "t4a.endpoint.bus",
+    },
+}
+
+
+# T4b — codec↔controller binding is a permanent architectural OOS in IPCAT:
+# IPCAT does not hold codec parts, I2S/TDM/PCM DAI-links, or codec-to-
+# controller bindings (those are board/schematic facts). Every T4b row is
+# NCC/authority_out_of_scope. The rule_id is the *only* citation on T4b
+# rows — no IPCAT tool is ever cited from this track.
+T4B_OOS_REASON: str = "authority_out_of_scope"
+T4B_RULE_ID:    str = "t4b.codec_binding.out_of_scope"
