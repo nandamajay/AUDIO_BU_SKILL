@@ -1,0 +1,116 @@
+{
+  "rows_by_track_subject": {
+    "T1.gpio.i2s.mclk": {
+      "authority": {
+        "origin": "ipcat.gpio_list_gpios_from_map",
+        "strength": "IPCAT_DIRECT",
+        "value": null
+      },
+      "citations": [],
+      "confidence": "high",
+      "coverage_gap_reason": null,
+      "notes": [],
+      "review_actions": [],
+      "rule_id": null,
+      "source": {},
+      "subject": "gpio.i2s.mclk",
+      "track": "T1",
+      "verdict": "MATCH",
+      "warning": false
+    },
+    "T2.swr.mstr.tx": {
+      "authority": {
+        "origin": "ipcat.swi_search_swi",
+        "strength": "IPCAT_DIRECT",
+        "value": null
+      },
+      "citations": [],
+      "confidence": "high",
+      "coverage_gap_reason": null,
+      "notes": [],
+      "review_actions": [
+        "confirm swr.mstr.tx bus name against IPCAT swi enumeration"
+      ],
+      "rule_id": null,
+      "source": {},
+      "subject": "swr.mstr.tx",
+      "track": "T2",
+      "verdict": "DISAGREE_WITH_AUTHORITY",
+      "warning": true
+    },
+    "T3.clocks.count": {
+      "authority": {
+        "origin": "ipcat.cardinality",
+        "strength": "IPCAT_DERIVED",
+        "value": null
+      },
+      "citations": [],
+      "confidence": "none",
+      "coverage_gap_reason": "authority_out_of_scope",
+      "notes": [],
+      "review_actions": [],
+      "rule_id": null,
+      "source": {},
+      "subject": "clocks.count",
+      "track": "T3",
+      "verdict": "NOT_CROSS_CHECKABLE",
+      "warning": false
+    },
+    "T4a.qup.se3": {
+      "authority": {
+        "origin": "ipcat.chipio_get_qups",
+        "strength": "IPCAT_DIRECT",
+        "value": null
+      },
+      "citations": [],
+      "confidence": "high",
+      "coverage_gap_reason": null,
+      "notes": [],
+      "review_actions": [],
+      "rule_id": "t4a.endpoint.qup",
+      "source": {},
+      "subject": "qup.se3",
+      "track": "T4a",
+      "verdict": "MATCH",
+      "warning": false
+    },
+    "T4b.codec.wsa883x": {
+      "authority": {
+        "origin": "none",
+        "strength": "UNAVAILABLE",
+        "value": null
+      },
+      "citations": [],
+      "confidence": "none",
+      "coverage_gap_reason": "authority_out_of_scope",
+      "notes": [],
+      "review_actions": [
+        "confirm codec DAI-link binding with schematic"
+      ],
+      "rule_id": "t4b.codec_binding.out_of_scope",
+      "source": {},
+      "subject": "codec.wsa883x",
+      "track": "T4b",
+      "verdict": "NOT_CROSS_CHECKABLE",
+      "warning": true
+    },
+    "T5.dts.firmware": {
+      "authority": {
+        "origin": "ipcat.chips_list_chips",
+        "strength": "IPCAT_DIRECT",
+        "value": null
+      },
+      "citations": [],
+      "confidence": "medium",
+      "coverage_gap_reason": null,
+      "notes": [],
+      "review_actions": [],
+      "rule_id": "t5.donor.firmware.sa8775p",
+      "source": {},
+      "subject": "dts.firmware",
+      "track": "T5",
+      "verdict": "PARTIAL_MATCH",
+      "warning": false
+    }
+  }
+}
