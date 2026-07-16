@@ -157,6 +157,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--analysis-timeout", type=int, default=None, metavar="SECONDS",
                         help="override the QGenie analysis subprocess timeout (default: 900s); "
                              "raise this for large kernel trees / evidence sets that legitimately need longer")
+    parser.add_argument("--generate", action="store_true", default=False,
+                        help="Run Phase-2B generation pipeline after Phase-2A cross-verification (default OFF)")
     args = parser.parse_args()
     if not (args.target or args.replay or args.rerun or args.onboard):
         parser.error("one of --target, --replay, --rerun, or --onboard is required")
@@ -441,7 +443,8 @@ def _record_onboarding_artifacts(*, target: str, run_id: str, attempt: int, kern
 
 
 def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str = "qgenie",
-                test_mode: bool = False, analysis_timeout: int | None = None) -> None:
+                test_mode: bool = False, analysis_timeout: int | None = None,
+                generate: bool = False) -> None:
     """Detect the nearest existing target and propose targets/<target>/case.generated.py.
 
     Read-only w.r.t. the kernel tree and case.py: it invokes only the
@@ -507,6 +510,17 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
         _run_crossverify(target, target_dir, output)
     except Exception as exc:  # noqa: BLE001 — diagnostic never propagates
         print(f"  [crossverify] skipped: {type(exc).__name__}: {exc}")
+
+    if generate:
+        from orchestrator.generation.facts import project_facts
+        from orchestrator.generation.runner import MissingPhase2ASnapshot, _run_generation
+        gc = output.get("generated_case") or {}
+        try:
+            facts = project_facts(gc.get("cross_verification", {}).get("rows", []))
+            _run_generation(gc, facts)
+        except MissingPhase2ASnapshot as exc:
+            print(f"phase-2b: {exc}", file=sys.stderr)
+            sys.exit(2)
 
     _write_onboarding_artifacts(target_dir, output)
     _record_onboarding_artifacts(target=target, run_id=run_id, attempt=attempt,
@@ -1410,7 +1424,7 @@ def main() -> None:
         sys.exit(do_rerun(args.rerun, args.kernel_source))
     if args.onboard:
         do_onboard(args.onboard, args.kernel_source, args.analysis_engine, args.test_mode,
-                   analysis_timeout=args.analysis_timeout)
+                   analysis_timeout=args.analysis_timeout, generate=args.generate)
         return
     do_run(args.target, args.evidence_source, args.kernel_source)
 
