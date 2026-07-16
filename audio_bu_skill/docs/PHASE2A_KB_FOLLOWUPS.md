@@ -90,6 +90,8 @@ or WP5-WP6 (also independent).
 - WP3.1 commit 7c13809 (references this follow-up in trailer)
 - crossverify_config.py::T5_DONOR_RULES
 
+**Status (v1.1, 2026-07-16):** The WP7 registration framework landed at commit c78d13f. A `@register_kb_rule` decorator was scaffolded but the actual KB-rule registration for the T5 donor-rule carve-out is **DEFERRED**. `T5_DONOR_RULES` remains in Phase-2A scope in `crossverify_config.py`; the `exempt_families` mechanism is not yet implemented. This follow-up remains open and requires a Phase-2A change to `crossverify_config.py` before the exemption can take effect for Nord. The deferred status has no impact on Phase-2B WP8 or WP9; WP10 (the CLI runner) does not depend on this fix.
+
 ## WP2 Nord fixture provenance — seeded, not projected from live Phase-2A
 
 **Observed:** The Nord fixture at `tests/fixtures/phase2b/nord_trusted_facts.json`
