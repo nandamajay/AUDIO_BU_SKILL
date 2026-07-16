@@ -1,0 +1,9 @@
+{
+  "artifact_class": "machine_driver",
+  "gating_rows": [
+    "T2.soundwire_master"
+  ],
+  "kind": "GeneratorSkipped",
+  "reason": "gating_row_disagree_on_bus",
+  "subject": "machine_driver"
+}

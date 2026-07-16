@@ -55,7 +55,7 @@ _PHASE2B_FIXTURE = _AUDIO_BU_ROOT / "tests" / "fixtures" / "phase2b" / "nord_tru
 # The regression anchor per §WP2(e). If you regenerated the fixture legitimately
 # (via ``tests/regenerate/regenerate_phase2b_fixtures.py --wp 2``), update this
 # constant AND the fixture in the same commit; both signals must agree.
-_EXPECTED_FIXTURE_SHA256 = "889f3bd9a8267c8cdc51df0fbfdc1059ae44e3420567f35e8a8230ec3a24ca1c"
+_EXPECTED_FIXTURE_SHA256 = "f9b697591294a00d73ef9d7e916f5d2ba098036f06e7d95a4583baa1549897c5"
 
 
 # ── Fixture rehydration helper ──────────────────────────────────────────────
@@ -73,6 +73,20 @@ _EXPECTED_FIXTURE_SHA256 = "889f3bd9a8267c8cdc51df0fbfdc1059ae44e3420567f35e8a82
 #: The rehydrator fans the single donor row out into these two Nord-truth
 #: rows so ``nord_trusted_facts.json`` reflects Nord's actual codec inventory.
 _NORD_T4B_CODEC_SUBJECTS: tuple[str, ...] = ("codec.adau1979", "codec.pcm1681")
+
+
+#: Nord IQ-10 T2 SoundWire-master subject alignment.
+#:
+#: The Phase-2A source fixture emits the T2 row on the legacy subject
+#: ``swr.mstr.tx``. Phase-2A's ``track_t2`` verifier actually emits exactly one
+#: subject — ``soundwire_master`` (crossverify.py) — so the frozen fixture had
+#: drifted. WP5's machine_driver gates on ``T2.*`` (DISAGREE → hard-skip), and
+#: its gating-row vocabulary uses ``soundwire_master``; the WP2 fixture is
+#: refreshed to match (decision C2). The Phase-2A source fixture is NOT touched
+#: (no-Phase-2A-touch constraint); instead the rehydrator renames the source
+#: subject here, the same shape as the T4b fan-out above.
+_NORD_T2_SOURCE_SUBJECT: str = "swr.mstr.tx"
+_NORD_T2_SUBJECT: str = "soundwire_master"
 
 
 def _rehydrate_phase2a_rows() -> list[VerificationRow]:
@@ -108,6 +122,14 @@ def _rehydrate_phase2a_rows() -> list[VerificationRow]:
                 nord_row = dict(base)
                 nord_row["subject"] = nord_subject
                 rows.append(VerificationRow(**nord_row))
+            continue
+        if r.get("track") == "T2" and r.get("subject") == _NORD_T2_SOURCE_SUBJECT:
+            # Decision C2: align the T2 subject to the single ``soundwire_master``
+            # subject Phase-2A's track_t2 actually emits. Verdict, warning,
+            # authority, and rule_id are untouched.
+            renamed = dict(r)
+            renamed["subject"] = _NORD_T2_SUBJECT
+            rows.append(VerificationRow(**renamed))
             continue
         rows.append(VerificationRow(**r))
     return rows
@@ -197,7 +219,7 @@ def test_phase2a_fixture_projects_to_expected_facts() -> None:
     keys = set(tf.rows_by_track_subject)
     expected_keys = {
         "T1.gpio.i2s.mclk",
-        "T2.swr.mstr.tx",
+        "T2.soundwire_master",
         "T3.clocks.count",
         "T4a.qup.se3",
         "T4b.codec.adau1979",

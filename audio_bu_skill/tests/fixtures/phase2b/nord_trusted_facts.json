@@ -18,7 +18,7 @@
       "verdict": "MATCH",
       "warning": false
     },
-    "T2.swr.mstr.tx": {
+    "T2.soundwire_master": {
       "authority": {
         "origin": "ipcat.swi_search_swi",
         "strength": "IPCAT_DIRECT",
@@ -33,7 +33,7 @@
       ],
       "rule_id": null,
       "source": {},
-      "subject": "swr.mstr.tx",
+      "subject": "soundwire_master",
       "track": "T2",
       "verdict": "DISAGREE_WITH_AUTHORITY",
       "warning": true
