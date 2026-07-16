@@ -56,6 +56,46 @@
       "verdict": "NOT_CROSS_CHECKABLE",
       "warning": false
     },
+    "T3.dsp_subsystem_instance": {
+      "authority": {
+        "origin": "wp_c.cardinality_catalog",
+        "strength": "IPCAT_DIRECT",
+        "value": {
+          "count": 1
+        }
+      },
+      "citations": [],
+      "confidence": "high",
+      "coverage_gap_reason": null,
+      "notes": [],
+      "review_actions": [],
+      "rule_id": null,
+      "source": {},
+      "subject": "dsp_subsystem_instance",
+      "track": "T3",
+      "verdict": "MATCH",
+      "warning": false
+    },
+    "T3.lpass_macro_instance": {
+      "authority": {
+        "origin": "wp_c.cardinality_catalog",
+        "strength": "IPCAT_DIRECT",
+        "value": {
+          "count": 0
+        }
+      },
+      "citations": [],
+      "confidence": "high",
+      "coverage_gap_reason": null,
+      "notes": [],
+      "review_actions": [],
+      "rule_id": null,
+      "source": {},
+      "subject": "lpass_macro_instance",
+      "track": "T3",
+      "verdict": "MATCH",
+      "warning": false
+    },
     "T4a.qup.se3": {
       "authority": {
         "origin": "ipcat.chipio_get_qups",

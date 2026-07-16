@@ -55,7 +55,7 @@ _PHASE2B_FIXTURE = _AUDIO_BU_ROOT / "tests" / "fixtures" / "phase2b" / "nord_tru
 # The regression anchor per §WP2(e). If you regenerated the fixture legitimately
 # (via ``tests/regenerate/regenerate_phase2b_fixtures.py --wp 2``), update this
 # constant AND the fixture in the same commit; both signals must agree.
-_EXPECTED_FIXTURE_SHA256 = "f9b697591294a00d73ef9d7e916f5d2ba098036f06e7d95a4583baa1549897c5"
+_EXPECTED_FIXTURE_SHA256 = "55f1ca8fd1db3c74fe12ac2dd676d49e703003a80fe1e1bfe766881b87e90e4a"
 
 
 # ── Fixture rehydration helper ──────────────────────────────────────────────
@@ -87,6 +87,72 @@ _NORD_T4B_CODEC_SUBJECTS: tuple[str, ...] = ("codec.adau1979", "codec.pcm1681")
 #: subject here, the same shape as the T4b fan-out above.
 _NORD_T2_SOURCE_SUBJECT: str = "swr.mstr.tx"
 _NORD_T2_SUBJECT: str = "soundwire_master"
+
+
+#: Nord IQ-10 T3 audio-resource cardinality rows (WP6 audioreach_topology gate).
+#:
+#: WP6's ``audioreach_topology`` generator gates on two T3 subjects —
+#: ``lpass_macro_instance`` and ``dsp_subsystem_instance`` (``config.GATING_ROWS``).
+#: The Phase-2A source fixture at ``tests/fixtures/phase2a/expected_rows.json``
+#: carries only ``T3.clocks.count`` — the two element-count subjects the WP6
+#: gate consults are absent from it. This is the same shape as the T4b codec
+#: fan-out above: Phase-2A's frozen fixture predates the WP-C element_counts
+#: schema (1.3.0) and does not enumerate these classes, so the rehydrator
+#: synthesizes the two Nord-truth rows from this constant rather than reading
+#: them out of ``expected_rows.json`` (which carries no ``element_counts`` block).
+#:
+#: The verdicts and authority shape mirror what ``crossverify.track_t3`` emits
+#: for a post-SWI catalog-MATCH row (``IPCAT_DIRECT`` +
+#: ``origin=wp_c.cardinality_catalog`` + the catalog count carried verbatim):
+#:
+#:   * ``dsp_subsystem_instance`` MATCH, count 1 — Nord's single ADSP (q6apm).
+#:   * ``lpass_macro_instance``  MATCH, count 0 — Nord is I2S-only; it declares
+#:     no LPASS macro instances (the divergence Eliza's snapshot disputes lives
+#:     on this very subject — see ``test_generation_audioreach``).
+#:
+#: NOTE (fixture-provenance gap, filed separately post-WP6): this seeds the WP2
+#: fixture rather than projecting it from a live Nord Phase-2A run. A full WP2
+#: fixture regeneration against live Nord Phase-2A is deferred until bespoke
+#: tooling exists — the same class of gap as the WP5 ``T2`` subject rename
+#: (decision C2).
+_NORD_T3_ROWS: tuple[dict, ...] = (
+    {
+        "track": "T3",
+        "subject": "dsp_subsystem_instance",
+        "source": {},
+        "authority": {
+            "strength": "IPCAT_DIRECT",
+            "origin": "wp_c.cardinality_catalog",
+            "value": {"count": 1},
+        },
+        "verdict": "MATCH",
+        "confidence": "high",
+        "coverage_gap_reason": None,
+        "rule_id": None,
+        "warning": False,
+        "review_actions": [],
+        "citations": [],
+        "notes": [],
+    },
+    {
+        "track": "T3",
+        "subject": "lpass_macro_instance",
+        "source": {},
+        "authority": {
+            "strength": "IPCAT_DIRECT",
+            "origin": "wp_c.cardinality_catalog",
+            "value": {"count": 0},
+        },
+        "verdict": "MATCH",
+        "confidence": "high",
+        "coverage_gap_reason": None,
+        "rule_id": None,
+        "warning": False,
+        "review_actions": [],
+        "citations": [],
+        "notes": [],
+    },
+)
 
 
 def _rehydrate_phase2a_rows() -> list[VerificationRow]:
@@ -132,6 +198,13 @@ def _rehydrate_phase2a_rows() -> list[VerificationRow]:
             rows.append(VerificationRow(**renamed))
             continue
         rows.append(VerificationRow(**r))
+    # WP6: synthesize the two T3 element-count rows the audioreach_topology gate
+    # consults. Phase-2A's frozen fixture predates the WP-C element_counts schema
+    # and carries only ``T3.clocks.count``; the two gate subjects
+    # (dsp_subsystem_instance, lpass_macro_instance) are fabricated here from
+    # ``_NORD_T3_ROWS`` — same idiom as the T4b codec fan-out above.
+    for t3_row in _NORD_T3_ROWS:
+        rows.append(VerificationRow(**t3_row))
     return rows
 
 
@@ -201,9 +274,10 @@ def test_phase2a_fixture_projects_to_expected_facts() -> None:
     — because downstream WPs' fixture chains compare byte contents.
     """
     rows = _rehydrate_phase2a_rows()
-    assert len(rows) == 7, (
-        f"Phase-2A fixture must yield 7 rows after Nord codec fan-out "
-        f"(5 non-T4b + 2 Nord codec rows from the single donor T4b row); got {len(rows)}"
+    assert len(rows) == 9, (
+        f"Phase-2A fixture must yield 9 rows after Nord fan-out "
+        f"(5 non-T4b + 2 Nord codec rows from the single donor T4b row "
+        f"+ 2 synthesized T3 element-count rows for the WP6 gate); got {len(rows)}"
     )
     tf = project_facts(rows)
     got_payload = json.dumps(tf.to_dict(), sort_keys=True, indent=2) + "\n"
@@ -221,6 +295,8 @@ def test_phase2a_fixture_projects_to_expected_facts() -> None:
         "T1.gpio.i2s.mclk",
         "T2.soundwire_master",
         "T3.clocks.count",
+        "T3.dsp_subsystem_instance",
+        "T3.lpass_macro_instance",
         "T4a.qup.se3",
         "T4b.codec.adau1979",
         "T4b.codec.pcm1681",

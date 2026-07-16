@@ -1,0 +1,9 @@
+{
+  "artifact_class": "audioreach_topology",
+  "gating_rows": [
+    "T3.lpass_macro_instance"
+  ],
+  "kind": "GeneratorSkipped",
+  "reason": "gating_row_disagree_on_lpass_count",
+  "subject": "audioreach_topology"
+}
