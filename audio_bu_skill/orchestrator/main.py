@@ -1170,6 +1170,133 @@ def _render_crossverify_section(gc: dict) -> list[str]:
     return lines
 
 
+def _render_generation_section(gc: dict) -> list[str]:
+    """Phase-2B WP8: Additive Generation section (per-artifact + WP7 fan-in).
+
+    Renders the WP3-WP6 GenerationResult list and the WP7 PostVerificationResult
+    attached at ``gc["generation"]`` (a dict with ``artifacts`` and
+    ``post_verification`` sub-keys). Mirrors ``_render_crossverify_section``:
+    pure, null-guarded, list-of-strings return, byte-unchanged report when
+    the generation payload is absent.
+
+    ``gc["generation"]`` is populated by a future WP10 runner. The renderer
+    treats its input as opaque JSON dicts (discriminated by the ``kind``
+    field on each artifact entry) — it does NOT deserialize back into
+    GenerationResult objects. This keeps the renderer free from
+    generation-side type churn.
+
+    Emits THREE subsections in order:
+
+      1. ``### Per-artifact status`` — one row per GenerationResult,
+         GeneratedArtifact and GeneratorSkipped discriminated by ``kind``.
+         Sorted by ``(artifact_class, subject)`` (mirrors
+         ``sort_key_for_result``). An empty artifacts list still emits the
+         section with an empty per-artifact table.
+      2. ``### Post-verification (WP7)`` — aggregate verdict + one row per
+         ``PostVerificationRow`` (pre-sorted by the producer; passed through
+         as-is).
+      3. ``### Contributes-rows FIXMEs`` — reviewer worklist over
+         ``contributes_rows`` entries on ``GeneratedArtifact`` items where
+         ``verdict == "NOT_CROSS_CHECKABLE"`` AND ``coverage_gap_reason`` is
+         set. OMITTED entirely when no artifact has any FIXME rows.
+
+    Pure — no I/O, no timestamps, no env reads; identical input → identical
+    output.
+    """
+    if not gc:
+        return []
+    gen = gc.get("generation")
+    if not isinstance(gen, dict):
+        return []
+    if not gen:
+        return []
+    artifacts = gen.get("artifacts")
+    if not isinstance(artifacts, list):
+        return []
+
+    # Sort artifacts by (artifact_class, subject) — mirrors sort_key_for_result.
+    sorted_artifacts = sorted(
+        artifacts,
+        key=lambda a: (str(a.get("artifact_class") or ""), str(a.get("subject") or "")),
+    )
+
+    lines: list[str] = [
+        "",
+        "## Generation",
+        "",
+        "Phase-2B code-generator fan-in: one entry per artifact class, plus "
+        "the WP7 post-generation trust verdict. **Diagnostic only** — does "
+        "not activate the case or write kernel files.",
+        "",
+        "### Per-artifact status",
+        "",
+        "| artifact_class | subject | kind | detail |",
+        "|----------------|---------|------|--------|",
+    ]
+    for art in sorted_artifacts:
+        artifact_class = art.get("artifact_class") or "—"
+        subject = art.get("subject") or "—"
+        kind = art.get("kind") or "—"
+        if kind == "GeneratedArtifact":
+            detail = art.get("path_hint") or "—"
+        elif kind == "GeneratorSkipped":
+            detail = art.get("reason") or "—"
+        else:
+            detail = "—"
+        lines.append(f"| {artifact_class} | {subject} | {kind} | {detail} |")
+
+    # Post-verification (WP7) subsection — always emitted.
+    post_verify = gen.get("post_verification") or {}
+    overall = post_verify.get("verdict") or "—"
+    pv_rows = post_verify.get("rows") or []
+    lines += [
+        "",
+        "### Post-verification (WP7)",
+        "",
+        f"Overall verdict: **{overall}**",
+        "",
+        "| artifact_class | subject | kind | verdict | message |",
+        "|----------------|---------|------|---------|---------|",
+    ]
+    for row in pv_rows:
+        artifact_class = row.get("artifact_class") or "—"
+        subject = row.get("subject") or "—"
+        kind = row.get("kind") or "—"
+        verdict = row.get("verdict") or "—"
+        message = row.get("message") or "—"
+        lines.append(f"| {artifact_class} | {subject} | {kind} | {verdict} | {message} |")
+
+    # Contributes-rows FIXMEs — reviewer worklist analog. Omitted if empty.
+    fixmes: list[tuple[str, str]] = []
+    for art in sorted_artifacts:
+        if art.get("kind") != "GeneratedArtifact":
+            continue
+        artifact_class = art.get("artifact_class") or "—"
+        for cr in art.get("contributes_rows") or []:
+            if cr.get("verdict") != "NOT_CROSS_CHECKABLE":
+                continue
+            if not cr.get("coverage_gap_reason"):
+                continue
+            track = cr.get("track") or "—"
+            subject = cr.get("subject") or "—"
+            reason = cr.get("coverage_gap_reason") or "—"
+            fixmes.append((artifact_class, f"{track}/{subject} ({reason})"))
+
+    if fixmes:
+        lines += [
+            "",
+            "### Contributes-rows FIXMEs",
+            "",
+            "| artifact | row |",
+            "|----------|-----|",
+        ]
+        for artifact, row_str in fixmes:
+            lines.append(f"| {artifact} | {row_str} |")
+
+    lines.append("")
+    return lines
+
+
 def _render_onboarding_report(output: dict) -> str:
     """Human-readable Markdown onboarding report with cited evidence."""
     gc = output["generated_case"]
@@ -1252,6 +1379,7 @@ def _render_onboarding_report(output: dict) -> str:
     lines += _render_confidence_ledger(gc)
     lines += _render_cardinality_section(gc)
     lines += _render_crossverify_section(gc)
+    lines += _render_generation_section(gc)
 
     lines += [
         "",
