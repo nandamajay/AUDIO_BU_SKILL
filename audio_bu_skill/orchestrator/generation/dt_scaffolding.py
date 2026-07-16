@@ -105,6 +105,7 @@ from orchestrator.generation.model import (
     GenerationResult,
     TrustedFacts,
 )
+from orchestrator.generation.registry import register_generator
 from orchestrator.reasoning.crossverify_model import VerificationRow
 
 # ── Nord IQ-10 constants (WP3, Nord-family scoped) ──────────────────────────
@@ -153,6 +154,15 @@ _GATING_ROW_NAMES: tuple[str, ...] = (
 )
 
 
+@register_generator(
+    "dt_scaffolding",
+    order=0,
+    gating_rows=(
+        ("T1", "gpio.i2s.*"),
+        ("T5", "dts.firmware"),
+        ("T5", "dts.compatible"),
+    ),
+)
 def generate_dt(facts: TrustedFacts, kb: object | None = None) -> GenerationResult:
     """Emit a DT scaffolding artifact or a skipped verdict for one target.
 

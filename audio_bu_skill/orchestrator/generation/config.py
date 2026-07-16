@@ -23,11 +23,30 @@ Public surface (see ``__all__`` at the bottom):
 * ``PATH_GUARD_ROOT`` — the only tree the engine may write to. ``is_path_within_guard``
   is the predicate the WP10 runner uses to enforce §5.4.
 
+WP7 registry refactor (API-preserving, computationally identical to v1.0):
+
+  * Config-owned constants (``SKIP_REASONS``, ``ADVISORY_ROWS``,
+    ``KNOWN_BAD_PARTIAL_MATCH_RULES``) are registered *eagerly* at this
+    module's import time, so they materialize as module attributes exactly as
+    before. Every ``register_skip_reason("...")`` call still carries the
+    literal in-source, so ``test_every_skip_reason_documented`` (which
+    inspects this module's source) continues to pass.
+  * Generator-derived constants (``_GENERATION_ARTIFACT_ORDER``,
+    ``GATING_ROWS``) are resolved *lazily* through a PEP 562 module
+    ``__getattr__``. Eager resolution would recurse: the generators import
+    ``config`` at their own import time (``from ...config import
+    PATH_GUARD_ROOT``); computing the order/gating eagerly here would require
+    importing those same generators before ``config`` finished initializing.
+    Lazy resolution breaks the cycle without churning any caller — a
+    ``from config import GATING_ROWS`` still returns the same tuple-of-tuples
+    dict.
+
 Import discipline (mirrors WP1a's discipline in reverse):
 
 * This module MAY import from ``orchestrator.reasoning.crossverify_model`` for
   ``VerificationRow`` type parity (adjacent facing).
-* This module MUST NOT import from ``orchestrator.generation.model`` — the
+* This module MAY import from ``orchestrator.generation.registry`` (added by
+  WP7). It MUST NOT import from ``orchestrator.generation.model`` — the
   invariant is: model → generic types; config → policy; runner (WP10) is the
   only site that composes both. Enforced by
   ``tests/test_generation_config.py::test_import_guard_no_model_import``.
@@ -42,6 +61,17 @@ from __future__ import annotations
 import os
 import posixpath
 from typing import TYPE_CHECKING
+
+from orchestrator.generation.registry import (
+    advisory_rows as _advisory_rows,
+    all_skip_reasons as _all_skip_reasons,
+    gating_rows_map as _gating_rows_map,
+    generator_order as _generator_order,
+    known_bad_rules as _known_bad_rules,
+    register_advisory_row,
+    register_known_bad_rule,
+    register_skip_reason,
+)
 
 if TYPE_CHECKING:
     # VerificationRow is not used at runtime here — this module ships only
@@ -59,15 +89,16 @@ if TYPE_CHECKING:
 #   * WP8 renderer — emits the ``## Generated Artifacts`` section in this
 #     order, matching the fixture chain from ``tests/fixtures/phase2b/``.
 #
-# Adding a new artifact class means adding it here AND adding a
-# ``GATING_ROWS`` entry (the two are keyed together — enforced by
-# ``test_artifact_order_matches_gating_keys``).
-_GENERATION_ARTIFACT_ORDER: tuple[str, ...] = (
-    "dt_scaffolding",
-    "codec_stub",
-    "machine_driver",
-    "audioreach_topology",
-)
+# Adding a new artifact class means adding a ``@register_generator`` on the
+# generator lane; the tuple is computed from the registry (WP7). The four
+# canonical lanes are kept here as a comment for grep-ability:
+#
+#     "dt_scaffolding",
+#     "codec_stub",
+#     "machine_driver",
+#     "audioreach_topology",
+#
+# Resolved lazily via ``__getattr__`` — see module docstring for why.
 
 
 # ── §WP1b (2) — gating tables (per spec §4.1) ──────────────────────────────
@@ -92,27 +123,16 @@ _GENERATION_ARTIFACT_ORDER: tuple[str, ...] = (
 # Known-bad donor residue (§4.4): a ``T5.dts.firmware`` PARTIAL_MATCH row whose
 # ``rule_id`` is in ``KNOWN_BAD_PARTIAL_MATCH_RULES`` is downgraded to a skip
 # regardless of this table — enforced at the runner, not here.
-GATING_ROWS: dict[str, tuple[tuple[str, str], ...]] = {
-    "dt_scaffolding": (
-        ("T1", "gpio.i2s.*"),
-        ("T5", "dts.firmware"),
-        ("T5", "dts.compatible"),
-    ),
-    "codec_stub": (
-        ("T4a", "*"),  # codec's SoC-side endpoint confirmed
-        ("T4b", "*"),  # codec side; advisory row (see ADVISORY_ROWS)
-    ),
-    "machine_driver": (
-        ("T1", "gpio.i2s.*"),  # pins wired
-        ("T4a", "qup.*"),      # SoC endpoints valid
-        ("T4b", "*"),          # codec side; advisory row
-        ("T2", "*"),           # any DISAGREE on the bus closes this gate
-    ),
-    "audioreach_topology": (
-        ("T3", "lpass_macro_instance"),
-        ("T3", "dsp_subsystem_instance"),
-    ),
-}
+#
+# WP7: the per-artifact ``(track, subject_pattern)`` tuples now live on each
+# generator's ``@register_generator(gating_rows=...)`` decorator; this dict is
+# computed from the registry lazily via ``__getattr__``. The literals for
+# grep-based traceability:
+#
+#   dt_scaffolding:     ("T1","gpio.i2s.*"), ("T5","dts.firmware"), ("T5","dts.compatible")
+#   codec_stub:         ("T4a","*"), ("T4b","*")
+#   machine_driver:     ("T1","gpio.i2s.*"), ("T4a","qup.*"), ("T4b","*"), ("T2","*")
+#   audioreach_topology:("T3","lpass_macro_instance"), ("T3","dsp_subsystem_instance")
 
 
 # ── §WP1b (3) — skip reasons (closed enumeration) ──────────────────────────
@@ -126,19 +146,25 @@ GATING_ROWS: dict[str, tuple[tuple[str, str], ...]] = {
 # The spec (§WP1b) lists ten reasons; WP10 (§5.4) adds ``path_guard_violation``
 # — the runner emits this when a generator's ``path_hint`` escapes
 # ``PATH_GUARD_ROOT``. Eleven total.
-SKIP_REASONS: frozenset[str] = frozenset({
-    "gating_row_warning",
-    "gating_row_review_required",
-    "gating_row_disagree",
-    "gating_row_partial_match_donor_residue",
-    "authority_not_in_snapshot",
-    "kb_rule_missing",
-    "codec_binding_disagreement",
-    "gating_row_disagree_on_bus",
-    "gating_row_disagree_on_lpass_count",
-    "gating_row_ambiguous_soundwire",
-    "path_guard_violation",
-})
+#
+# WP7: registered centrally here (not per-generator) because reasons are
+# shared across lanes (e.g. ``gating_row_disagree``), and because the lint
+# test ``test_every_skip_reason_documented`` grep-scans this module's source
+# for each literal — so the literals must physically appear in these
+# ``register_skip_reason("...")`` calls.
+register_skip_reason("gating_row_warning")
+register_skip_reason("gating_row_review_required")
+register_skip_reason("gating_row_disagree")
+register_skip_reason("gating_row_partial_match_donor_residue")
+register_skip_reason("authority_not_in_snapshot")
+register_skip_reason("kb_rule_missing")
+register_skip_reason("codec_binding_disagreement")
+register_skip_reason("gating_row_disagree_on_bus")
+register_skip_reason("gating_row_disagree_on_lpass_count")
+register_skip_reason("gating_row_ambiguous_soundwire")
+register_skip_reason("path_guard_violation")
+
+SKIP_REASONS: frozenset[str] = _all_skip_reasons()
 
 
 # ── §WP1b (4) — advisory rows (§3.7 carve-out) ─────────────────────────────
@@ -153,7 +179,8 @@ SKIP_REASONS: frozenset[str] = frozenset({
 # Every other track (T1, T2, T3, T4a, T5) requires MATCH (or PARTIAL_MATCH-open
 # per §4.4). Adding a new advisory track is a spec change to §3.7 — the
 # ``test_advisory_rows_only_t4b`` test fails on any drift.
-ADVISORY_ROWS: frozenset[tuple[str, str]] = frozenset({("T4b", "*")})
+register_advisory_row("T4b", "*")
+ADVISORY_ROWS: frozenset[tuple[str, str]] = _advisory_rows()
 
 
 # ── §WP1b (5) — known-bad PARTIAL_MATCH rules (§4.4) ───────────────────────
@@ -173,7 +200,8 @@ ADVISORY_ROWS: frozenset[tuple[str, str]] = frozenset({("T4b", "*")})
 #
 # Adding a rule to this frozenset is a spec change to §4.4 — enforced by
 # ``test_known_bad_rules_only_donor_sa8775p``.
-KNOWN_BAD_PARTIAL_MATCH_RULES: frozenset[str] = frozenset({"t5.donor.firmware.sa8775p"})
+register_known_bad_rule("t5.donor.firmware.sa8775p")
+KNOWN_BAD_PARTIAL_MATCH_RULES: frozenset[str] = _known_bad_rules()
 
 
 # ── §WP1b (6) — path guard (§5.4) ──────────────────────────────────────────
@@ -233,6 +261,30 @@ def is_path_within_guard(path: str) -> bool:
     if normalized == root_no_slash:
         return True
     return normalized.startswith(root_no_slash + "/")
+
+
+# ── WP7: lazy resolution for generator-derived constants ───────────────────
+#
+# PEP 562 module ``__getattr__`` fires for both ``config.GATING_ROWS`` and
+# ``from config import GATING_ROWS`` — so callers see the constant as if it
+# were a top-level literal, but the actual computation defers until first
+# access. This is what makes the registry cycle-free: config finishes
+# initializing (exporting ``PATH_GUARD_ROOT`` etc.), THEN the generator lanes
+# import + self-register, THEN this ``__getattr__`` returns the assembled
+# tuple/dict.
+_LAZY_NAMES: frozenset[str] = frozenset({
+    "_GENERATION_ARTIFACT_ORDER",
+    "GATING_ROWS",
+})
+
+
+def __getattr__(name: str) -> object:
+    """Lazy resolution for generator-derived constants (PEP 562)."""
+    if name == "_GENERATION_ARTIFACT_ORDER":
+        return _generator_order()
+    if name == "GATING_ROWS":
+        return _gating_rows_map()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [

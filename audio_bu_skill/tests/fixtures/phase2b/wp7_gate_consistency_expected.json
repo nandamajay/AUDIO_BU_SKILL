@@ -1,0 +1,51 @@
+{
+  "verdict": "pass",
+  "rows": [
+    {
+      "artifact_class": "audioreach_topology",
+      "subject": "audioreach_topology",
+      "kind": "gate_consistency",
+      "verdict": "pass",
+      "message": "all 2 gating rows open (t3.lpass_macro_instance, t3.dsp_subsystem_instance)",
+      "details": {
+        "gates_checked": 2,
+        "gates_open": 2
+      }
+    },
+    {
+      "artifact_class": "codec_stub",
+      "subject": "codec_stub",
+      "kind": "gate_consistency",
+      "verdict": "pass",
+      "message": "all 3 gating rows open (t4a.qup.se3, t4b.codec.adau1979 [advisory], t4b.codec.pcm1681 [advisory])",
+      "details": {
+        "gates_checked": 3,
+        "gates_open": 3,
+        "advisory_opens": 2
+      }
+    },
+    {
+      "artifact_class": "dt_scaffolding",
+      "subject": "dt_scaffolding",
+      "kind": "gate_consistency",
+      "verdict": "pass",
+      "message": "all 3 gating rows open (t1.gpio.i2s.mclk, t5.dts.firmware, t5.dts.compatible)",
+      "details": {
+        "gates_checked": 3,
+        "gates_open": 3
+      }
+    },
+    {
+      "artifact_class": "machine_driver",
+      "subject": "machine_driver",
+      "kind": "skip_validity",
+      "verdict": "pass",
+      "message": "skip is valid: gate t2.soundwire_master is closed (DISAGREE_WITH_AUTHORITY), reason gating_row_disagree_on_bus is registered",
+      "details": {
+        "reason": "gating_row_disagree_on_bus",
+        "cited_gates": 1,
+        "closed_gates": 1
+      }
+    }
+  ]
+}

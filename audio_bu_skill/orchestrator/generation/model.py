@@ -227,3 +227,93 @@ class TrustedFacts:
             },
         }
         return {key: values[key] for key in _TRUSTED_FACTS_KEY_ORDER}
+
+
+# ── WP7 — post-verification model (fan-in trust check) ─────────────────────
+#
+# WP7's post-gen verifier runs AFTER all four generator lanes have produced
+# their ``GenerationResult`` (``GeneratedArtifact`` | ``GeneratorSkipped``).
+# It does not re-open gates; it audits the gate/skip decisions AGAINST the
+# source ``TrustedFacts`` to catch two bug classes:
+#
+#   (A) Gate-consistency (per ``GeneratedArtifact``): every gating row for the
+#       artifact_class is open (per §4 rules, with the §3.7 T4b advisory
+#       carve-out for the ``NCC + authority_out_of_scope`` verdict).
+#   (B) Skip-validity (per ``GeneratorSkipped``): every cited gating_rows
+#       entry is (i) a real row key in ``TrustedFacts.rows_by_track_subject``
+#       (glob patterns like ``"gpio.i2s.*"`` are tolerated), (ii) at least one
+#       cited row is closed in the source (with the §4.4 KNOWN_BAD carve-out —
+#       a PARTIAL_MATCH row whose ``rule_id`` is known-bad counts as closed),
+#       and (iii) the skip ``reason`` is registered in ``SKIP_REASONS``.
+#
+# ``verdict``: ``"pass"`` | ``"fail"``. ``details`` is a free-form structured
+# breadcrumb (row keys inspected, carve-out that applied, etc.) — a JSON dict
+# with sorted keys so byte-identity fixture comparisons stay stable.
+_POST_ROW_KEY_ORDER: tuple[str, ...] = (
+    "artifact_class",
+    "subject",
+    "kind",
+    "verdict",
+    "message",
+    "details",
+)
+_POST_RESULT_KEY_ORDER: tuple[str, ...] = ("verdict", "rows")
+
+
+@dataclass(frozen=True)
+class PostVerificationRow:
+    """One row of the WP7 post-generation verifier's output.
+
+    ``kind`` mirrors the ``GenerationResult`` variant this row audits —
+    ``"GeneratedArtifact"`` or ``"GeneratorSkipped"``. Immutable.
+    """
+
+    artifact_class: str
+    subject: str
+    kind: str
+    verdict: str
+    message: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def sort_key(cls, item: PostVerificationRow) -> tuple[str, str, str]:
+        """Stable sort key: ``(artifact_class, subject, kind)``."""
+        return (item.artifact_class, item.subject, item.kind)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-serializable projection with a fixed key order.
+
+        ``details`` keys are sorted at emit time so ``json.dumps(sort_keys=True)``
+        is not the *only* thing standing between us and byte drift.
+        """
+        values: dict[str, Any] = {
+            "artifact_class": self.artifact_class,
+            "subject": self.subject,
+            "kind": self.kind,
+            "verdict": self.verdict,
+            "message": self.message,
+            "details": {key: self.details[key] for key in sorted(self.details)},
+        }
+        return {key: values[key] for key in _POST_ROW_KEY_ORDER}
+
+
+@dataclass(frozen=True)
+class PostVerificationResult:
+    """WP7 aggregate: overall ``verdict`` + per-artifact ``rows``.
+
+    ``verdict`` is ``"pass"`` iff every row's verdict is ``"pass"``. ``rows``
+    is sorted by ``PostVerificationRow.sort_key`` so serialization is
+    byte-stable across runs.
+    """
+
+    verdict: str
+    rows: list[PostVerificationRow] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Deterministic, JSON-serializable projection with a fixed key order."""
+        sorted_rows = sorted(self.rows, key=PostVerificationRow.sort_key)
+        values: dict[str, Any] = {
+            "verdict": self.verdict,
+            "rows": [row.to_dict() for row in sorted_rows],
+        }
+        return {key: values[key] for key in _POST_RESULT_KEY_ORDER}

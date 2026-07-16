@@ -108,6 +108,7 @@ from orchestrator.generation.model import (
     GenerationResult,
     TrustedFacts,
 )
+from orchestrator.generation.registry import register_generator
 from orchestrator.reasoning.crossverify_model import VerificationRow
 
 # ── Nord IQ-10 constants (WP6, Nord-family scoped) ──────────────────────────
@@ -124,6 +125,14 @@ _GATE_LPASS: str = "T3.lpass_macro_instance"
 _GATE_DSP: str = "T3.dsp_subsystem_instance"
 
 
+@register_generator(
+    "audioreach_topology",
+    order=3,
+    gating_rows=(
+        ("T3", "lpass_macro_instance"),
+        ("T3", "dsp_subsystem_instance"),
+    ),
+)
 def generate_audioreach_topology(
     facts: TrustedFacts, kb: object | None = None
 ) -> GenerationResult:

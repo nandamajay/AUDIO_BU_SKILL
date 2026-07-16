@@ -421,6 +421,7 @@ def test_import_guard() -> None:
     allowed_hits: dict[str, bool] = {
         "orchestrator.generation.config": False,
         "orchestrator.generation.model": False,
+        "orchestrator.generation.registry": False,
         "orchestrator.reasoning.crossverify_model": False,
     }
     for node in ast.walk(tree):

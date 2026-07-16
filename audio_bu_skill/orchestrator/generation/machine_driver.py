@@ -106,6 +106,7 @@ from orchestrator.generation.model import (
     GenerationResult,
     TrustedFacts,
 )
+from orchestrator.generation.registry import register_generator
 from orchestrator.reasoning.crossverify_model import VerificationRow
 
 # ── Nord IQ-10 constants (WP5, Nord-family scoped) ──────────────────────────
@@ -176,6 +177,16 @@ _DAI_LINKS: tuple[dict[str, object], ...] = (
 )
 
 
+@register_generator(
+    "machine_driver",
+    order=2,
+    gating_rows=(
+        ("T1", "gpio.i2s.*"),
+        ("T4a", "qup.*"),
+        ("T4b", "*"),
+        ("T2", "*"),
+    ),
+)
 def generate_machine_driver(facts: TrustedFacts, kb: object | None = None) -> GenerationResult:
     """Emit a machine-driver artifact or a skipped verdict for one target.
 

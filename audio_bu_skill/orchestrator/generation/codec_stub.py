@@ -104,6 +104,7 @@ from orchestrator.generation.model import (
     GenerationResult,
     TrustedFacts,
 )
+from orchestrator.generation.registry import register_generator
 from orchestrator.reasoning.crossverify_model import VerificationRow
 
 # ── Nord IQ-10 constants (WP4, Nord-family scoped) ──────────────────────────
@@ -162,6 +163,14 @@ _FIXME_SIGNALS: tuple[tuple[str, str], ...] = (
 )
 
 
+@register_generator(
+    "codec_stub",
+    order=1,
+    gating_rows=(
+        ("T4a", "*"),
+        ("T4b", "*"),
+    ),
+)
 def generate_codec_stub(facts: TrustedFacts, kb: object | None = None) -> GenerationResult:
     """Emit a codec stub artifact or a skipped verdict for one target.
 
