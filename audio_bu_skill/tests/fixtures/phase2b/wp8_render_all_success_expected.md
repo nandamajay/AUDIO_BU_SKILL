@@ -5,12 +5,12 @@ Phase-2B code-generator fan-in: one entry per artifact class, plus the WP7 post-
 
 ### Per-artifact status
 
-| artifact_class | subject | kind | detail |
-|----------------|---------|------|--------|
-| audioreach_topology | audioreach_topology | GeneratedArtifact | generated/audioreach_topology/topo.xml |
-| codec_stub | codec_stub | GeneratedArtifact | generated/codec_stub/codec.c |
-| dt_scaffolding | dt_scaffolding | GeneratedArtifact | generated/dt_scaffolding/board.dtsi |
-| machine_driver | machine_driver | GeneratedArtifact | generated/machine_driver/machine.c |
+| artifact_class | subject | kind | detail | status |
+|----------------|---------|------|--------|--------|
+| audioreach_topology | audioreach_topology | GeneratedArtifact | generated/audioreach_topology/topo.xml | — |
+| codec_stub | codec_stub | GeneratedArtifact | generated/codec_stub/codec.c | — |
+| dt_scaffolding | dt_scaffolding | GeneratedArtifact | generated/dt_scaffolding/board.dtsi | — |
+| machine_driver | machine_driver | GeneratedArtifact | generated/machine_driver/machine.c | — |
 
 ### Post-verification (WP7)
 

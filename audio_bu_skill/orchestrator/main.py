@@ -33,8 +33,10 @@ own kernel_source_path; a run fails only if neither yields a valid kernel tree.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -447,6 +449,17 @@ def _record_onboarding_artifacts(*, target: str, run_id: str, attempt: int, kern
     print(f"  wrote {len(result['files'])} attempt artifacts to {result['dir']}")
 
 
+def _sha256_hex(b: bytes) -> str:
+    """WP11.4 — hex sha256 of a byte string (idempotency short-circuit, C3/D1).
+
+    Sole hashing primitive for the write-loop idempotency check. Hashes raw
+    bytes ONLY (D1: sha256(artifact.bytes_), never the path_hint) so cosmetic
+    dest renames do not spuriously invalidate the short-circuit. Used against
+    both the in-memory generator bytes and a dest file's on-disk bytes.
+    """
+    return hashlib.sha256(b).hexdigest()
+
+
 def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str = "qgenie",
                 test_mode: bool = False, analysis_timeout: int | None = None,
                 generate: bool = False, dry_run: bool = False) -> None:
@@ -540,6 +553,13 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
         # do_onboard via sys.exit(1) so the report never attests a file that
         # was not written). GeneratorSkipped results carry no bytes and are
         # not materialized (kind != "GeneratedArtifact").
+        #
+        # WP11.4 — idempotency status record. dest_hint-keyed control-flow
+        # ledger the loop writes as it decides skip/overwrite/write (D3). The
+        # render channel is a per-artifact mirror on art_dict itself (see the
+        # idempotency block below) — this local dict is retained for
+        # in-process debugging / future policy but is NOT read by the render.
+        _generation_status: dict[str, str] = {}
         for art_dict in gc.get("generation", {}).get("artifacts", []):
             if art_dict.get("kind") != "GeneratedArtifact":
                 continue
@@ -565,31 +585,89 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
             dest_hint = f"generated/{run_id}/{stripped}"
             synthetic = dataclasses.replace(artifact, path_hint=dest_hint)
 
+            # WP11.4 — idempotency short-circuit (C3, D1-D4). Discrete block:
+            # ONE dest.is_file() ∧ hash-match check (D3 line-1) → SKIP with
+            # `continue` (short-circuit path); mismatch (D3 line-2) falls
+            # through to the WP11.3 gate below and takes the atomic-rename
+            # overwrite path; dest absent (D3 line-3) falls through to the
+            # unchanged WP11.2 first-write path. art_hash is computed from
+            # artifact.bytes_ in memory (D1, G6) — never from a re-read of a
+            # file. No manifest, no on-disk hash state (D2, G7). The read
+            # here is a probe only: `dest.read_bytes()` returns bytes without
+            # ever writing, so dry-run + pre-existing match is C4-safe.
+            dest = WORKSPACE_ROOT / dest_hint
+            art_hash = _sha256_hex(artifact.bytes_)
+            dest_exists = dest.is_file()
+            dest_matches = False
+            if dest_exists:
+                disk_hash = _sha256_hex(dest.read_bytes())
+                dest_matches = (disk_hash == art_hash)
+            if dest_matches:
+                # D3 line-1 — bytes on disk match: idempotent no-op. No write,
+                # no temp file, no rename. dest.stat().st_mtime_ns is
+                # preserved by construction (nothing touches dest).
+                _generation_status[dest_hint] = "unchanged"
+                art_dict["generation_status"] = "unchanged"
+                continue
+
             # WP11.3 — --dry-run gate (C4: truly side-effect-free). This single
             # `if not dry_run:` is the ONLY write gate (G3 — scattered per-check
-            # guards would be a violation). write_artifact_bytes is the sole
-            # creator of generated/<run_id>/ (its internal dest.parent.mkdir at
-            # runner.py:104); skipping this call means the run_dir is never
-            # created — no file, no partial write, no lock, no bare mkdir. H1
-            # (above) stays ungated: a path_hint contract violation is an error
-            # in BOTH modes and sys.exit(1) is not a generated/ side-effect. The
-            # ## Generation report (rendered from the original path_hint at
-            # _write_onboarding_artifacts below) is likewise NOT gated — it is
-            # byte-identical with or without writes (Q4).
+            # guards would be a violation). Under dry-run we do NOT annotate a
+            # status: refinement 1 rule — write loop only assigns status when
+            # it has definitive knowledge; render's `.get("generation_status",
+            # "—")` fallback covers the dry-run non-decisive path. write path
+            # below has TWO branches: dest absent → WP11.2 first-write
+            # (unchanged: single write_artifact_bytes call); dest present with
+            # mismatched bytes → atomic-rename overwrite (D4: temp write in
+            # same dir + Path.replace, EXACTLY ONE temp write + ONE rename).
+            # H1 above stays ungated: a path_hint contract violation is an
+            # error in BOTH modes and sys.exit(1) is not a generated/
+            # side-effect. The ## Generation report (rendered from the
+            # original path_hint at _write_onboarding_artifacts below) is
+            # likewise NOT gated — it is byte-identical with or without
+            # writes (Q4).
             if not dry_run:
-                written = write_artifact_bytes(synthetic, WORKSPACE_ROOT)
-                # C2 — fail-closed on path_guard_violation. write_artifact_bytes
-                # returns None when is_path_within_guard rejects the (re-rooted)
-                # path_hint; a rejection is a trust-boundary breach (runner.py:38-44),
-                # not a recoverable skip. Halt before the report renders.
-                if written is None:
-                    print(
-                        f"phase-2b: path_guard_violation — refusing to write "
-                        f"{dest_hint!r} outside PATH_GUARD_ROOT (see "
-                        f"orchestrator/generation/runner.py:38-44)",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
+                if dest_exists:
+                    # D4 — atomic-ish overwrite: write to a sibling temp path
+                    # via write_artifact_bytes (path-guard applies uniformly),
+                    # then Path.replace() the temp over the dest. Rename is
+                    # atomic on POSIX same-filesystem — a partial write cannot
+                    # leave a truncated dest. Temp suffix includes the pid so
+                    # concurrent runs (unlikely in practice) do not collide.
+                    temp_hint = f"{dest_hint}.tmp.{os.getpid()}"
+                    synthetic_temp = dataclasses.replace(artifact, path_hint=temp_hint)
+                    written_temp = write_artifact_bytes(synthetic_temp, WORKSPACE_ROOT)
+                    if written_temp is None:
+                        print(
+                            f"phase-2b: path_guard_violation — refusing to write "
+                            f"{temp_hint!r} outside PATH_GUARD_ROOT (see "
+                            f"orchestrator/generation/runner.py:38-44)",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                    temp_path = WORKSPACE_ROOT / temp_hint
+                    temp_path.replace(dest)  # atomic on POSIX same-fs
+                    _generation_status[dest_hint] = "updated"
+                    art_dict["generation_status"] = "updated"
+                else:
+                    # WP11.2 first-write path (dest absent) — unchanged: the
+                    # initial write is trivially atomic-ish because there is
+                    # no prior file to protect.
+                    written = write_artifact_bytes(synthetic, WORKSPACE_ROOT)
+                    # C2 — fail-closed on path_guard_violation. write_artifact_bytes
+                    # returns None when is_path_within_guard rejects the (re-rooted)
+                    # path_hint; a rejection is a trust-boundary breach (runner.py:38-44),
+                    # not a recoverable skip. Halt before the report renders.
+                    if written is None:
+                        print(
+                            f"phase-2b: path_guard_violation — refusing to write "
+                            f"{dest_hint!r} outside PATH_GUARD_ROOT (see "
+                            f"orchestrator/generation/runner.py:38-44)",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                    _generation_status[dest_hint] = "created"
+                    art_dict["generation_status"] = "created"
 
     _write_onboarding_artifacts(target_dir, output)
     _record_onboarding_artifacts(target=target, run_id=run_id, attempt=attempt,
@@ -1313,8 +1391,8 @@ def _render_generation_section(gc: dict) -> list[str]:
         "",
         "### Per-artifact status",
         "",
-        "| artifact_class | subject | kind | detail |",
-        "|----------------|---------|------|--------|",
+        "| artifact_class | subject | kind | detail | status |",
+        "|----------------|---------|------|--------|--------|",
     ]
     for art in sorted_artifacts:
         artifact_class = art.get("artifact_class") or "—"
@@ -1326,7 +1404,13 @@ def _render_generation_section(gc: dict) -> list[str]:
             detail = art.get("reason") or "—"
         else:
             detail = "—"
-        lines.append(f"| {artifact_class} | {subject} | {kind} | {detail} |")
+        # WP11.4 — idempotency status column. The write loop annotates
+        # gc["generation"]["artifacts"] entries in-place via
+        # art_dict["generation_status"] with one of "created" | "updated" |
+        # "unchanged"; everything else (GeneratorSkipped rows, dry-run
+        # non-decisive paths) renders as "—" per the explicit fallback below.
+        status = art.get("generation_status", "—")
+        lines.append(f"| {artifact_class} | {subject} | {kind} | {detail} | {status} |")
 
     # Post-verification (WP7) subsection — always emitted.
     post_verify = gen.get("post_verification") or {}

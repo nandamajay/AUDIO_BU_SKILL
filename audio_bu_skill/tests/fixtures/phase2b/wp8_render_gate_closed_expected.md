@@ -5,10 +5,10 @@ Phase-2B code-generator fan-in: one entry per artifact class, plus the WP7 post-
 
 ### Per-artifact status
 
-| artifact_class | subject | kind | detail |
-|----------------|---------|------|--------|
-| codec_stub | codec_stub | GeneratedArtifact | generated/codec_stub/codec.c |
-| machine_driver | machine_driver | GeneratorSkipped | gating_row_disagree_on_bus |
+| artifact_class | subject | kind | detail | status |
+|----------------|---------|------|--------|--------|
+| codec_stub | codec_stub | GeneratedArtifact | generated/codec_stub/codec.c | — |
+| machine_driver | machine_driver | GeneratorSkipped | gating_row_disagree_on_bus | — |
 
 ### Post-verification (WP7)
 
