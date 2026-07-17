@@ -90,3 +90,5 @@ audio_bu_skill/targets/*/evidence_inventory.json
 audio_bu_skill/experiments/ipcat_probe/artifacts/
 prior_art/
 generated/
+# WP11 commit-message draft staging area — local scratch, never committed.
+.wp11_staging/
