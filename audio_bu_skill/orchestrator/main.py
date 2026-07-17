@@ -159,11 +159,16 @@ def parse_args() -> argparse.Namespace:
                              "raise this for large kernel trees / evidence sets that legitimately need longer")
     parser.add_argument("--generate", action="store_true", default=False,
                         help="Run Phase-2B generation pipeline after Phase-2A cross-verification (default OFF)")
+    parser.add_argument("--dry-run", action="store_true", default=False,
+                        help="With --generate: render the ## Generation report (path_hints) but write no "
+                             "artifact bytes to disk — truly side-effect-free (nothing under generated/<run_id>/)")
     args = parser.parse_args()
     if not (args.target or args.replay or args.rerun or args.onboard):
         parser.error("one of --target, --replay, --rerun, or --onboard is required")
     if args.analysis_engine == "local-test" and not args.test_mode:
         parser.error("--analysis-engine local-test requires --test-mode (no silent local fallback in production)")
+    if args.dry_run and not args.generate:
+        parser.error("--dry-run requires --generate (it gates only the generation write step)")
     return args
 
 
@@ -444,7 +449,7 @@ def _record_onboarding_artifacts(*, target: str, run_id: str, attempt: int, kern
 
 def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str = "qgenie",
                 test_mode: bool = False, analysis_timeout: int | None = None,
-                generate: bool = False) -> None:
+                generate: bool = False, dry_run: bool = False) -> None:
     """Detect the nearest existing target and propose targets/<target>/case.generated.py.
 
     Read-only w.r.t. the kernel tree and case.py: it invokes only the
@@ -560,19 +565,31 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
             dest_hint = f"generated/{run_id}/{stripped}"
             synthetic = dataclasses.replace(artifact, path_hint=dest_hint)
 
-            written = write_artifact_bytes(synthetic, WORKSPACE_ROOT)
-            # C2 — fail-closed on path_guard_violation. write_artifact_bytes
-            # returns None when is_path_within_guard rejects the (re-rooted)
-            # path_hint; a rejection is a trust-boundary breach (runner.py:38-44),
-            # not a recoverable skip. Halt before the report renders.
-            if written is None:
-                print(
-                    f"phase-2b: path_guard_violation — refusing to write "
-                    f"{dest_hint!r} outside PATH_GUARD_ROOT (see "
-                    f"orchestrator/generation/runner.py:38-44)",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
+            # WP11.3 — --dry-run gate (C4: truly side-effect-free). This single
+            # `if not dry_run:` is the ONLY write gate (G3 — scattered per-check
+            # guards would be a violation). write_artifact_bytes is the sole
+            # creator of generated/<run_id>/ (its internal dest.parent.mkdir at
+            # runner.py:104); skipping this call means the run_dir is never
+            # created — no file, no partial write, no lock, no bare mkdir. H1
+            # (above) stays ungated: a path_hint contract violation is an error
+            # in BOTH modes and sys.exit(1) is not a generated/ side-effect. The
+            # ## Generation report (rendered from the original path_hint at
+            # _write_onboarding_artifacts below) is likewise NOT gated — it is
+            # byte-identical with or without writes (Q4).
+            if not dry_run:
+                written = write_artifact_bytes(synthetic, WORKSPACE_ROOT)
+                # C2 — fail-closed on path_guard_violation. write_artifact_bytes
+                # returns None when is_path_within_guard rejects the (re-rooted)
+                # path_hint; a rejection is a trust-boundary breach (runner.py:38-44),
+                # not a recoverable skip. Halt before the report renders.
+                if written is None:
+                    print(
+                        f"phase-2b: path_guard_violation — refusing to write "
+                        f"{dest_hint!r} outside PATH_GUARD_ROOT (see "
+                        f"orchestrator/generation/runner.py:38-44)",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
 
     _write_onboarding_artifacts(target_dir, output)
     _record_onboarding_artifacts(target=target, run_id=run_id, attempt=attempt,
@@ -1476,7 +1493,8 @@ def main() -> None:
         sys.exit(do_rerun(args.rerun, args.kernel_source))
     if args.onboard:
         do_onboard(args.onboard, args.kernel_source, args.analysis_engine, args.test_mode,
-                   analysis_timeout=args.analysis_timeout, generate=args.generate)
+                   analysis_timeout=args.analysis_timeout, generate=args.generate,
+                   dry_run=args.dry_run)
         return
     do_run(args.target, args.evidence_source, args.kernel_source)
 
