@@ -512,8 +512,15 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
         print(f"  [crossverify] skipped: {type(exc).__name__}: {exc}")
 
     if generate:
+        import dataclasses
+
         from orchestrator.generation.facts import project_facts
-        from orchestrator.generation.runner import MissingPhase2ASnapshot, _run_generation
+        from orchestrator.generation.model import GeneratedArtifact
+        from orchestrator.generation.runner import (
+            MissingPhase2ASnapshot,
+            _run_generation,
+            write_artifact_bytes,
+        )
         gc = output.get("generated_case") or {}
         try:
             facts = project_facts(gc.get("cross_verification", {}).get("rows", []))
@@ -521,6 +528,51 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
         except MissingPhase2ASnapshot as exc:
             print(f"phase-2b: {exc}", file=sys.stderr)
             sys.exit(2)
+
+        # WP11.2 — materialize artifact bytes to disk (C1: this write loop runs
+        # to completion BEFORE _write_onboarding_artifacts renders the
+        # ## Generation section at main.py:606-607; a write failure below halts
+        # do_onboard via sys.exit(1) so the report never attests a file that
+        # was not written). GeneratorSkipped results carry no bytes and are
+        # not materialized (kind != "GeneratedArtifact").
+        for art_dict in gc.get("generation", {}).get("artifacts", []):
+            if art_dict.get("kind") != "GeneratedArtifact":
+                continue
+            artifact = GeneratedArtifact.from_dict(art_dict)
+
+            # H1 — the generator's path_hint MUST live under generated/. A hint
+            # without that prefix is a generator contract violation, not a
+            # recoverable skip: fail closed with sys.exit(1), NOT a bare assert
+            # (asserts strip under `python -O`).
+            if not artifact.path_hint.startswith("generated/"):
+                print(
+                    f"phase-2b: path_hint contract violation — {artifact.path_hint!r} "
+                    f"does not start with 'generated/' (artifact_class="
+                    f"{artifact.artifact_class!r}, subject={artifact.subject!r})",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            # Inject-after-prefix (Q2 Option B): keep the 'generated/' prefix the
+            # path guard requires (config.py:263), re-root the remainder under
+            # the run_id -> generated/<run_id>/<artifact_class>/<file>.
+            stripped = artifact.path_hint[len("generated/"):]
+            dest_hint = f"generated/{run_id}/{stripped}"
+            synthetic = dataclasses.replace(artifact, path_hint=dest_hint)
+
+            written = write_artifact_bytes(synthetic, WORKSPACE_ROOT)
+            # C2 — fail-closed on path_guard_violation. write_artifact_bytes
+            # returns None when is_path_within_guard rejects the (re-rooted)
+            # path_hint; a rejection is a trust-boundary breach (runner.py:38-44),
+            # not a recoverable skip. Halt before the report renders.
+            if written is None:
+                print(
+                    f"phase-2b: path_guard_violation — refusing to write "
+                    f"{dest_hint!r} outside PATH_GUARD_ROOT (see "
+                    f"orchestrator/generation/runner.py:38-44)",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
     _write_onboarding_artifacts(target_dir, output)
     _record_onboarding_artifacts(target=target, run_id=run_id, attempt=attempt,

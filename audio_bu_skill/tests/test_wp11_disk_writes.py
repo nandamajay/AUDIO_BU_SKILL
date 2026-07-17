@@ -226,8 +226,130 @@ def test_generate_writes_audioreach_bytes_to_disk() -> None:
     )
 
 
+def test_bad_path_hint_exits_one() -> None:
+    """H1 isolation: a path_hint without the 'generated/' prefix exits 1.
+
+    The write loop guards two distinct trust boundaries with two distinct
+    messages:
+
+      * H1 (main.py) — path_hint does not start with 'generated/'. Caught
+        BEFORE the inject-after-prefix transform and BEFORE
+        write_artifact_bytes runs. Message: "path_hint contract violation".
+      * C2 (main.py) — write_artifact_bytes returned None (path guard
+        rejected the re-rooted hint). Message: "path_guard_violation".
+
+    This test proves H1 fires for ``path_hint="artifacts/foo/bar"`` — a hint
+    that is not even a traversal attack (``../../etc/passwd`` would trip the
+    path guard / C2, a DIFFERENT guard). We assert the stderr says
+    "path_hint contract violation" and NOT "path_guard_violation", so a
+    reviewer can see WHICH guard fired. We also assert nothing landed under
+    generated/<run_id>/ — a fail-closed guard must not have written first.
+
+    We inject the bad artifact by patching the runner's ``_run_generation``
+    (do_onboard imports that name from the runner module at call time, so the
+    patch target is ``orchestrator.generation.runner._run_generation``), which
+    lets us bypass the live gate entirely and pin the assertion on the H1
+    path only.
+    """
+    import contextlib
+    import io
+
+    import orchestrator.generation.runner as runner_mod
+    import orchestrator.main as m
+
+    target = "nord-iq10"
+
+    def _fake_generation_bad_hint(gc: dict, facts: object) -> None:
+        """Populate gc["generation"] with one artifact whose path_hint has no
+        'generated/' prefix — mirrors the real _run_generation storage shape
+        (dicts via to_dict(), not GeneratedArtifact objects)."""
+        from orchestrator.generation.model import GeneratedArtifact
+
+        bad = GeneratedArtifact(
+            subject="lpass_macro_instance",
+            artifact_class="audioreach_topology",
+            path_hint="artifacts/foo/bar",  # H1: no 'generated/' prefix
+            bytes_=b"/* would-be topology - must never touch disk */\n",
+            contributes_rows=[],
+        )
+        gc["generation"] = {
+            "artifacts": [bad.to_dict()],
+            "post_verification": {"verdict": "pass", "rows": []},
+        }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _fake_workspace_yaml(root)
+        kernel = _fake_kernel(root)
+
+        targets_root = root / "audio_bu_skill" / "targets"
+        _existing_target(targets_root, "lemans-like")
+        target_dir = targets_root / target
+        ev_offline = target_dir / "evidence" / "offline"
+        ev_offline.mkdir(parents=True, exist_ok=True)
+        (ev_offline / "PCM1681_datasheet.txt").write_text("dac datasheet\n", encoding="utf-8")
+
+        original_targets_root = m.TARGETS_ROOT
+        original_workspace_root = m.WORKSPACE_ROOT
+        original_run_generation = runner_mod._run_generation
+        m.TARGETS_ROOT = targets_root
+        m.WORKSPACE_ROOT = root
+        runner_mod._run_generation = _fake_generation_bad_hint
+        try:
+            run_id, _attempt, _is_new = m._resolve_onboarding_run_id(target)
+
+            stderr = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(stderr):
+                    m.do_onboard(
+                        target,
+                        str(kernel),
+                        analysis_engine="local-test",
+                        test_mode=True,
+                        generate=True,
+                    )
+            except SystemExit as exc:
+                assert exc.code == 1, (
+                    f"H1 must sys.exit(1), got exit code {exc.code!r}"
+                )
+            else:
+                raise AssertionError(
+                    "H1 did not fire: do_onboard returned normally on a "
+                    "path_hint with no 'generated/' prefix"
+                )
+
+            err = stderr.getvalue()
+            assert "path_hint contract violation" in err, (
+                "H1 stderr must name the path_hint contract violation, got:\n" + err
+            )
+            # G2 — prove it was H1, not the path guard (C2). If this fired
+            # 'path_guard_violation', H1 was skipped and the transform ran on a
+            # non-'generated/' hint — a different (wrong) code path.
+            assert "path_guard_violation" not in err, (
+                "wrong guard fired: stderr mentions path_guard_violation, so C2 "
+                "ran instead of H1 — the H1 prefix check was bypassed. stderr:\n" + err
+            )
+
+            # Fail-closed: a rejected write must not have touched disk first.
+            generated_run_dir = root / "generated" / run_id
+            assert not generated_run_dir.exists(), (
+                "fail-closed breach: H1 exited 1 but bytes were written under "
+                f"{generated_run_dir} — a rejected write must be side-effect-free"
+            )
+        finally:
+            m.TARGETS_ROOT = original_targets_root
+            m.WORKSPACE_ROOT = original_workspace_root
+            runner_mod._run_generation = original_run_generation
+
+    print(
+        "PASS: bad path_hint (no 'generated/' prefix) exits 1 via H1 "
+        "(path_hint contract violation, not path_guard_violation); nothing written"
+    )
+
+
 def main() -> None:
     test_generate_writes_audioreach_bytes_to_disk()
+    test_bad_path_hint_exits_one()
     print("ALL TESTS PASSED")
 
 

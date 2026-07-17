@@ -114,6 +114,29 @@ class GeneratedArtifact:
         }
         return {key: values[key] for key in _GENERATED_KEY_ORDER}
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "GeneratedArtifact":
+        """Rehydrate a GeneratedArtifact from its to_dict() output for
+        the write path (WP11.2).
+
+        Partial round-trip by design: contributes_rows is intentionally
+        set to [] because the write path (runner.py:101-105) reads only
+        path_hint and bytes_. Full VerificationRow rehydration would
+        require VerificationRow.from_dict in reasoning/crossverify_model.py,
+        which is deferred until a downstream consumer needs it.
+
+        Callers that need contributes_rows must not use from_dict — use
+        the original GeneratedArtifact object instead, or extend this
+        method (and add VerificationRow.from_dict) when the need arises.
+        """
+        return cls(
+            subject=d["subject"],
+            artifact_class=d["artifact_class"],
+            path_hint=d["path_hint"],
+            bytes_=bytes.fromhex(d["bytes_hex"]),
+            contributes_rows=[],
+        )
+
 
 @dataclass(frozen=True)
 class GeneratorSkipped:

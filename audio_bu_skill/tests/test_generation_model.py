@@ -406,6 +406,50 @@ def test_import_guard_no_config_import() -> None:
     print("PASS: model.py has no import from generation.config (import guard held)")
 
 
+# ── 8. GeneratedArtifact.from_dict — partial round-trip (WP11.2) ────────────
+
+
+def test_generated_artifact_from_dict_partial_round_trip() -> None:
+    """from_dict rehydrates the write-path fields; contributes_rows drops to [].
+
+    Added under the WP11.2 authorization: the do_onboard write loop stores
+    artifacts as to_dict() output (bytes_hex) in gc["generation"]["artifacts"],
+    then must rehydrate to a GeneratedArtifact to run the inject-after-prefix
+    dest transform (dataclasses.replace) before calling write_artifact_bytes.
+
+    This is a PARTIAL round-trip by design (Option (b)): path_hint, bytes_,
+    artifact_class, subject survive; contributes_rows is intentionally [].
+    We do NOT assert full equality (round_trip == art) — that would fail on
+    contributes_rows and mislead future readers into thinking round-trip is
+    total.
+    """
+    row = _row()
+    art = _artifact(
+        subject="lpass_macro_instance",
+        artifact_class="audioreach_topology",
+        path_hint="generated/audioreach_topology/nord_audioreach.dtsi",
+        bytes_=b"/* audioreach topology */\n",
+        contributes_rows=[row],
+    )
+
+    round_trip = GeneratedArtifact.from_dict(art.to_dict())
+
+    # (b) path_hint verbatim
+    assert round_trip.path_hint == art.path_hint
+    # (c) bytes_ survives the hex round-trip
+    assert round_trip.bytes_ == art.bytes_
+    # (d) artifact_class verbatim
+    assert round_trip.artifact_class == art.artifact_class
+    # subject verbatim (field is part of to_dict + constructor)
+    assert round_trip.subject == art.subject
+    # (e) contributes_rows intentionally dropped — proves the partial contract
+    assert round_trip.contributes_rows == []
+    # negative: NOT total — the original carried a row, the rehydration does not
+    assert art.contributes_rows == [row]
+    assert round_trip != art
+    print("PASS: GeneratedArtifact.from_dict partial round-trip (contributes_rows dropped)")
+
+
 def main() -> None:
     test_generated_artifact_frozen_and_serializable()  # 1
     test_generator_skipped_frozen_and_serializable()   # 2
@@ -414,6 +458,7 @@ def main() -> None:
     test_sort_keys_deterministic()                     # 5
     test_to_dict_json_roundtrip()                      # 6
     test_import_guard_no_config_import()               # 7
+    test_generated_artifact_from_dict_partial_round_trip()  # 8
     print("ALL TESTS PASSED")
 
 
