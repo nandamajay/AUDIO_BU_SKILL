@@ -579,6 +579,85 @@ def test_regenerate_flag_not_accepted_by_test_modules() -> None:
     )
 
 
+# ── (h) project_facts accepts dicts from gc["cross_verification"]["rows"] ──
+
+
+def test_project_facts_accepts_dicts_from_cross_verification() -> None:
+    """project_facts accepts raw dicts from gc["cross_verification"]["rows"].
+
+    WP10 hotfix: ``_run_crossverify`` (Phase-2A wiring, pre-existing since WP8)
+    serializes rows as dicts into ``gc["cross_verification"]["rows"]``.
+    ``main.py`` passes those dicts directly to ``project_facts``; before this
+    fix ``project_facts`` would crash with ``AttributeError: 'dict' object has
+    no attribute 'track'``.
+
+    Contract: ``project_facts(dicts)`` must produce a result byte-identical to
+    ``project_facts(rehydrated_rows)`` — same ``TrustedFacts.to_dict()`` output,
+    same ``to_dict()`` JSON serialization. Tests both the WP2 nord fixture (9
+    rows, the canonical generator chain fixture) and the Phase-2A source
+    fixture (the rehydrate path used by existing tests).
+    """
+    import json
+
+    # ── (h1) WP2 nord_trusted_facts.json — the canonical Phase-2B fixture ──
+    # Load the fixture as raw dicts (exactly as gc["cross_verification"]["rows"]
+    # carries them after Phase-2A cross_verification serialization).
+    nord_fixture_text = _PHASE2B_FIXTURE.read_text(encoding="utf-8")
+    nord_payload = json.loads(nord_fixture_text)
+    # nord_trusted_facts.json has shape {"rows_by_track_subject": {...}} —
+    # each value is a VerificationRow-shaped dict keyed by "T*.subject".
+    rows_dict_values = list(nord_payload["rows_by_track_subject"].values())
+    assert len(rows_dict_values) == 9, (
+        f"expected 9 rows in WP2 fixture; got {len(rows_dict_values)}"
+    )
+
+    # Call project_facts with raw dicts (the hotfix path).
+    tf_from_dicts = project_facts(rows_dict_values)
+
+    # Rehydrate the same dicts to VerificationRow objects (the existing path).
+    typed_rows = [VerificationRow(**d) for d in rows_dict_values]
+    tf_from_typed = project_facts(typed_rows)
+
+    # Both paths must produce byte-identical TrustedFacts.to_dict() output.
+    got_dicts = json.dumps(tf_from_dicts.to_dict(), sort_keys=True, indent=2)
+    got_typed = json.dumps(tf_from_typed.to_dict(), sort_keys=True, indent=2)
+    assert got_dicts == got_typed, (
+        "project_facts(dicts) != project_facts(typed_rows) — byte-identity violated\n"
+        f"dicts result:\n{got_dicts}\n\ntyped result:\n{got_typed}"
+    )
+
+    # All 9 keys must be present.
+    expected_keys = {
+        "T1.gpio.i2s.mclk",
+        "T2.soundwire_master",
+        "T3.clocks.count",
+        "T3.dsp_subsystem_instance",
+        "T3.lpass_macro_instance",
+        "T4a.qup.se3",
+        "T4b.codec.adau1979",
+        "T4b.codec.pcm1681",
+        "T5.dts.firmware",
+    }
+    assert set(tf_from_dicts.rows_by_track_subject) == expected_keys, (
+        f"key mismatch: {set(tf_from_dicts.rows_by_track_subject) ^ expected_keys!r}"
+    )
+
+    # ── (h2) Mixed list — dicts and VerificationRow objects interleaved ──────
+    # Real gc["cross_verification"]["rows"] is all-dicts, but defensively confirm
+    # a mixed list works (future-proofs callers that pre-convert some rows).
+    mixed_rows: list = [VerificationRow(**rows_dict_values[0])] + rows_dict_values[1:]
+    tf_from_mixed = project_facts(mixed_rows)
+    got_mixed = json.dumps(tf_from_mixed.to_dict(), sort_keys=True, indent=2)
+    assert got_mixed == got_typed, (
+        "project_facts(mixed) != project_facts(typed_rows) — mixed-list byte-identity violated"
+    )
+
+    print(
+        "PASS: (h) project_facts accepts dicts, typed rows, and mixed lists; "
+        "all three produce byte-identical TrustedFacts"
+    )
+
+
 def main() -> None:
     test_empty_rows_yields_empty_facts()                   # (a)
     test_phase2a_fixture_projects_to_expected_facts()      # (b)
@@ -587,6 +666,7 @@ def main() -> None:
     test_regression_anchor_byte_hash()                     # (e)
     test_facts_import_guard()                              # (f)
     test_regenerate_flag_not_accepted_by_test_modules()    # (g)
+    test_project_facts_accepts_dicts_from_cross_verification()  # (h)
     print("ALL TESTS PASSED")
 
 

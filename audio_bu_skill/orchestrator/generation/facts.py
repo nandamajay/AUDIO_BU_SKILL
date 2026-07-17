@@ -60,7 +60,21 @@ from orchestrator.generation.model import TrustedFacts
 from orchestrator.reasoning.crossverify_model import VerificationRow
 
 
-def project_facts(rows: list[VerificationRow]) -> TrustedFacts:
+def _row_from_maybe_dict(row: VerificationRow | dict) -> VerificationRow:
+    """Return row unchanged if it is a VerificationRow; construct one from a dict.
+
+    ``gc["cross_verification"]["rows"]`` stores serialized dicts rather than
+    ``VerificationRow`` objects (Phase-2A wiring serializes to dict on write;
+    this is pre-existing since WP8). Callers such as ``main.py`` pass those
+    dicts directly; this helper lets ``project_facts`` accept either shape
+    so neither the Phase-2A wiring nor ``main.py`` need modification.
+    """
+    if isinstance(row, VerificationRow):
+        return row
+    return VerificationRow(**row)
+
+
+def project_facts(rows: list) -> TrustedFacts:
     """Project a Phase-2A row list to a Phase-2B ``TrustedFacts``.
 
     Pure, deterministic, zero I/O. Every row lands in
@@ -76,8 +90,11 @@ def project_facts(rows: list[VerificationRow]) -> TrustedFacts:
     Parameters
     ----------
     rows:
-        Phase-2A ``VerificationRow`` list, typically
-        ``cross_verification.rows`` from a completed verification run.
+        Phase-2A ``VerificationRow`` list, or a list of the serialized dicts
+        that ``gc["cross_verification"]["rows"]`` carries (i.e. the output of
+        ``VerificationRow.to_dict()``). Both shapes are accepted; mixed lists
+        are also tolerated. Callers need not rehydrate before calling.
+        Typically ``cross_verification.rows`` from a completed verification run.
 
     Returns
     -------
@@ -88,8 +105,9 @@ def project_facts(rows: list[VerificationRow]) -> TrustedFacts:
     """
     rows_by_track_subject: dict[str, VerificationRow] = {}
     for row in rows:
-        key = f"{row.track}.{row.subject}"
-        rows_by_track_subject[key] = row
+        vrow = _row_from_maybe_dict(row)
+        key = f"{vrow.track}.{vrow.subject}"
+        rows_by_track_subject[key] = vrow
     return TrustedFacts(rows_by_track_subject=rows_by_track_subject)
 
 
