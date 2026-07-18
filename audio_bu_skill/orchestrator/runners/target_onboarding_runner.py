@@ -419,7 +419,11 @@ def _map_analysis_to_envelope(
                 f"{verdict.get('note', 'no matching DT GPIO assignment found')}"
             )
 
-    if ipcat_findings["status"] in ("generic_only", "unavailable", "queried_no_result"):
+    # NEEDS_REVIEW trigger: any non-live IPCAT state. LIVE_IPCAT_VERIFIED is
+    # the ONLY state that clears this gate. CACHED_IPCAT_ONLY intentionally
+    # triggers review — cached evidence must not be silently accepted as
+    # live-verified (see _ipcat_evidence_summary tri-state contract).
+    if ipcat_findings["status"] in ("CACHED_IPCAT_ONLY", "NO_IPCAT_EVIDENCE"):
         needs_review.append(
             f"ipcat_coverage: {ipcat_findings['status']} — {ipcat_findings['summary']}"
         )
@@ -543,24 +547,46 @@ def _ipcat_evidence_summary(
     mcp_target_specific = bool(self_report.get("returned_target_specific"))
     mcp_generic_only = bool(self_report.get("returned_generic_only"))
 
+    # Tri-state trust chain — evidence-first mode MUST distinguish these:
+    #
+    #   LIVE_IPCAT_VERIFIED — QGenie self-reports having queried the IPCAT
+    #     MCP and received target-specific evidence. This is the only state
+    #     that unblocks the strong-trust downstream flows.
+    #
+    #   CACHED_IPCAT_ONLY  — offline evidence/ipcat/ files exist but MCP
+    #     was NOT verified live. Cached evidence may be stale, hand-fetched,
+    #     or copied from a donor; it does not equal live verification. This
+    #     state MUST be surfaced as NEEDS_REVIEW, not silently accepted.
+    #
+    #   NO_IPCAT_EVIDENCE  — neither live MCP verification nor cached files.
+    #     Nothing to lean on; downstream must gate accordingly.
+    #
+    # The prior 4-way enum (target_specific / generic_only / queried_no_result
+    # / unavailable) collapsed CACHED_IPCAT_ONLY into target_specific — the
+    # silent-downgrade bug this replaces. `generic_only` (MCP-queried but
+    # non-target-specific) folds into CACHED_IPCAT_ONLY iff cached files
+    # exist, else NO_IPCAT_EVIDENCE — in both cases the caller does NOT get
+    # LIVE_IPCAT_VERIFIED.
     if mcp_target_specific:
-        status = "target_specific"
-        summary = "IPCAT (MCP) returned target-specific evidence."
+        status = "LIVE_IPCAT_VERIFIED"
+        summary = "IPCAT (MCP) returned target-specific evidence (live-verified)."
     elif offline_ipcat_files:
-        status = "target_specific"
-        summary = f"{len(offline_ipcat_files)} offline-cached IPCAT evidence file(s) available."
-    elif mcp_generic_only:
-        status = "generic_only"
-        summary = "IPCAT (MCP) was queried but returned only generic, non-target-specific content."
-    elif mcp_queried:
-        status = "generic_only"
-        summary = "IPCAT (MCP) was queried but did not report target-specific results."
-    elif ipcat_mcp_requested or offline_ipcat_files:
-        status = "queried_no_result"
-        summary = "IPCAT was queried (offline cache and/or MCP requested) but no usable evidence was found."
+        status = "CACHED_IPCAT_ONLY"
+        summary = (
+            f"{len(offline_ipcat_files)} offline-cached IPCAT file(s) present; "
+            "MCP not verified live this run."
+        )
+    elif mcp_generic_only or mcp_queried or ipcat_mcp_requested:
+        status = "NO_IPCAT_EVIDENCE"
+        summary = (
+            "IPCAT queried but returned no target-specific evidence, and no "
+            "cached files present."
+        )
     else:
-        status = "unavailable"
-        summary = "No IPCAT evidence source was available: no offline cache, no MCP query requested/self-reported."
+        status = "NO_IPCAT_EVIDENCE"
+        summary = (
+            "No IPCAT evidence: MCP not queried and no cached files present."
+        )
 
     return {
         "status": status,
