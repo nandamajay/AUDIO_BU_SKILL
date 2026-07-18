@@ -20,10 +20,17 @@ grep-based value-drift):
      GeneratorSkipped with a reason string that isn't in ``SKIP_REASONS``
      must fail skip-validity. This is the "typo in the reason literal"
      guard.
-  5. ``test_skip_validity_fail_when_cited_gate_expands_to_zero_rows`` — a
-     GeneratorSkipped citing ``T4a.qup.*`` whose glob matches nothing in
-     ``rows_by_track_subject`` must fail (§4.4: the cited gate must resolve
-     to at least one real row).
+  5. ``test_skip_validity_no_source_facts_available_when_all_cited_tracks_absent`` —
+     a GeneratorSkipped whose cited-track projection is entirely empty
+     emits the distinct WP7 Option B verdict ``no_source_facts_available``
+     (a skip cannot be audited against absent evidence — this is
+     preserved as a distinct state from both ``fail`` mixed-mismatch and
+     the ``authority_out_of_scope`` advisory carve-out).
+  5b. ``test_skip_validity_fail_when_cited_gate_expands_to_zero_rows`` —
+     the mixed-mismatch case: the cited track HAS rows in
+     ``rows_by_track_subject``, but the specific gate glob matches none
+     of them. This still fails skip-validity with ``verdict == "fail"``
+     — a citation mismatch, not an absence-of-evidence signal.
   6. ``test_skip_validity_pass_when_known_bad_partial_match_closes_gate`` —
      a T5 PARTIAL_MATCH row whose ``rule_id`` is in
      ``KNOWN_BAD_PARTIAL_MATCH_RULES`` counts as CLOSED for skip validity.
@@ -305,23 +312,68 @@ def test_skip_validity_fail_when_reason_not_registered() -> None:
     print("PASS: skip-validity FAIL when reason not in SKIP_REASONS")
 
 
-# ── 5. Skip-validity FAIL when cited gate expands to zero rows ──────────────
+# ── 5. Skip-validity no_source_facts_available when tracks absent ──────────
 
 
-def test_skip_validity_fail_when_cited_gate_expands_to_zero_rows() -> None:
-    """A GeneratorSkipped citing a gate that matches no real rows fails.
+def test_skip_validity_no_source_facts_available_when_all_cited_tracks_absent() -> None:
+    """Empty rows_by_track_subject → distinct verdict, not ``fail``.
 
-    Catches "fabricated citation" — a generator claims to skip because of
-    a gate that isn't even in the projection. §4.4: every cited gate must
-    resolve (via glob or literal match) to at least one row in
-    ``rows_by_track_subject``.
+    WP7 Option B: when *every* cited gate matches zero rows AND *every*
+    cited track is entirely absent from ``rows_by_track_subject``, the
+    verifier cannot audit the skip against evidence that doesn't exist.
+    Emit ``no_source_facts_available`` — a distinct state that must NOT
+    be conflated with either the mixed-mismatch ``fail`` path (some
+    rows exist, wrong ones) or the ``authority_out_of_scope`` advisory
+    carve-out (rows exist, closed a specific way).
     """
     facts = TrustedFacts(rows_by_track_subject={})  # projection is empty
 
     skipped = _skipped(
         "codec_stub",
         reason="authority_not_in_snapshot",
-        gating_rows=["T4a.qup.*"],  # glob that matches nothing
+        gating_rows=["T4a.qup.*"],  # cited track T4a has no rows at all
+    )
+    result = verify_generation_result([skipped], facts)
+
+    # Overall stays fail — a run with no source facts to audit against is
+    # honestly blocked, not silently promoted.
+    assert result.verdict == "fail", (
+        f"expected overall 'fail' (no_source_facts is not pass), got {result.verdict!r}"
+    )
+    row = result.rows[0]
+    assert row.kind == "skip_validity"
+    assert row.verdict == "no_source_facts_available", (
+        f"expected distinct verdict, got {row.verdict!r}"
+    )
+    assert "no source facts available" in row.message.lower(), (
+        f"message must name the absent-evidence condition; got: {row.message!r}"
+    )
+    assert row.details["cited_tracks"] == ["T4a"]
+    assert row.details["tracks_with_no_rows"] == ["T4a"]
+    print("PASS: skip-validity no_source_facts_available when all cited tracks absent")
+
+
+# ── 5b. Skip-validity FAIL when cited gate expands to zero rows (mixed) ─────
+
+
+def test_skip_validity_fail_when_cited_gate_expands_to_zero_rows() -> None:
+    """Mixed-mismatch: cited track HAS rows, but the specific gate matches none.
+
+    Distinct from #5: here ``rows_by_track_subject`` DOES contain rows
+    for the cited track T4a — just not any matching the ``qup.*`` glob.
+    This is a real citation mismatch (§4.4: the cited gate must resolve
+    to at least one real row), so verdict stays ``fail``.
+    """
+    rows_by_key = {
+        # T4a rows exist, but under a different subject prefix than qup.*
+        "T4a.i2s.something": _row("T4a", "i2s.something", "MATCH"),
+    }
+    facts = TrustedFacts(rows_by_track_subject=rows_by_key)
+
+    skipped = _skipped(
+        "codec_stub",
+        reason="authority_not_in_snapshot",
+        gating_rows=["T4a.qup.*"],  # T4a has rows, but none under qup.*
     )
     result = verify_generation_result([skipped], facts)
 
@@ -334,7 +386,7 @@ def test_skip_validity_fail_when_cited_gate_expands_to_zero_rows() -> None:
     assert "T4a.qup" in row.message, (
         f"failure message must name the unresolved gate; got: {row.message!r}"
     )
-    print("PASS: skip-validity FAIL when cited gate expands to zero rows")
+    print("PASS: skip-validity FAIL when cited gate expands to zero rows (mixed-mismatch)")
 
 
 # ── 6. Skip-validity PASS when KNOWN_BAD PARTIAL_MATCH counts as closed ─────
@@ -444,13 +496,14 @@ def test_import_guard() -> None:
 
 
 def main() -> None:
-    test_happy_path_all_pass()                                      # 1
-    test_gate_consistency_fail_when_required_row_closed()           # 2
-    test_gate_consistency_t4b_advisory_open_honored()               # 3
-    test_skip_validity_fail_when_reason_not_registered()            # 4
-    test_skip_validity_fail_when_cited_gate_expands_to_zero_rows()  # 5
-    test_skip_validity_pass_when_known_bad_partial_match_closes_gate()  # 6
-    test_import_guard()                                             # 7
+    test_happy_path_all_pass()                                              # 1
+    test_gate_consistency_fail_when_required_row_closed()                   # 2
+    test_gate_consistency_t4b_advisory_open_honored()                       # 3
+    test_skip_validity_fail_when_reason_not_registered()                    # 4
+    test_skip_validity_no_source_facts_available_when_all_cited_tracks_absent()  # 5
+    test_skip_validity_fail_when_cited_gate_expands_to_zero_rows()          # 5b
+    test_skip_validity_pass_when_known_bad_partial_match_closes_gate()      # 6
+    test_import_guard()                                                     # 7
     print("ALL TESTS PASSED")
 
 

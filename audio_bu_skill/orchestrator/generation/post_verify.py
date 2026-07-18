@@ -25,6 +25,13 @@ grep-based value-drift):
         (ii)  Every cited ``gating_rows`` entry must resolve to ≥1 real row
               in ``facts.rows_by_track_subject`` — glob-tolerant, so
               ``"T1.gpio.i2s.*"`` is satisfied by any row under that prefix.
+              When *every* cited gate returns zero matches *and* every
+              cited track is entirely absent from ``rows_by_track_subject``,
+              emit the distinct verdict ``no_source_facts_available``
+              (WP7 Option B) — the skip cannot be audited against absent
+              evidence and MUST NOT be conflated with the mixed-mismatch
+              ``fail`` path or with the ``authority_out_of_scope`` advisory
+              carve-out.
         (iii) At least one cited gate must be CLOSED in ``facts`` — with
               the §4.4 KNOWN_BAD carve-out (a ``PARTIAL_MATCH`` row whose
               ``rule_id`` is in ``KNOWN_BAD_PARTIAL_MATCH_RULES`` counts
@@ -304,6 +311,45 @@ def _verify_skipped(
             closed_gates.append(cited)
 
     if unknown_gates:
+        # Option B (WP7 evidence-first): distinguish "no source facts for
+        # the cited tracks at all" from "some rows exist but don't cover
+        # these specific gates". The former is a symptom of a target with
+        # no crossverify evidence (Nord: no topology.pinmux, no DTS pins);
+        # the latter is a real citation mismatch. Advisory carve-outs
+        # (T4b NCC + authority_out_of_scope) remain a separate `fail`
+        # path — they exist as rows in facts, just closed in a specific
+        # way — and MUST NOT be conflated with either verdict here.
+        cited_tracks = {
+            _parse_cited_gate(cited)[0] for cited in skipped.gating_rows
+        }
+        tracks_with_no_rows = {
+            track for track in cited_tracks
+            if not any(
+                key.startswith(f"{track}.")
+                for key in facts.rows_by_track_subject
+            )
+        }
+        if len(unknown_gates) == len(skipped.gating_rows) and tracks_with_no_rows == cited_tracks:
+            return PostVerificationRow(
+                artifact_class=skipped.artifact_class,
+                subject=skipped.subject,
+                kind="skip_validity",
+                verdict="no_source_facts_available",
+                message=(
+                    "skip-validity: no source facts available for cited "
+                    f"tracks {sorted(cited_tracks)} — this run has zero "
+                    "crossverify rows under any of them. Skip verdict "
+                    "cannot be audited against absent evidence; not a "
+                    "citation mismatch. Preserved as distinct from "
+                    "authority_out_of_scope."
+                ),
+                details={
+                    "reason": skipped.reason,
+                    "cited_tracks": sorted(cited_tracks),
+                    "tracks_with_no_rows": sorted(tracks_with_no_rows),
+                    "inspected_rows": inspected,
+                },
+            )
         return PostVerificationRow(
             artifact_class=skipped.artifact_class,
             subject=skipped.subject,
@@ -368,8 +414,13 @@ def verify_generation_result(
     concern).
 
     Overall ``verdict`` is ``"pass"`` iff every emitted row's verdict is
-    ``"pass"``. Empty ``results`` yields ``verdict="pass"`` with an empty
-    ``rows`` list — a nothing-to-audit outcome is not a failure.
+    ``"pass"``. Rows with the distinct WP7 verdict
+    ``"no_source_facts_available"`` are NOT ``"pass"`` — the overall
+    result stays ``"fail"``. This preserves evidence-first semantics:
+    a run with no source facts to audit against is honestly blocked,
+    not silently promoted. Empty ``results`` yields ``verdict="pass"``
+    with an empty ``rows`` list — a nothing-to-audit outcome is not a
+    failure.
 
     The lazy config attributes (``_GENERATION_ARTIFACT_ORDER``,
     ``GATING_ROWS``) are imported here at call time rather than at module
