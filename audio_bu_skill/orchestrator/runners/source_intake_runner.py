@@ -73,9 +73,20 @@ def discover_evidence(
             return 0
         count = 0
         for file_path in sorted(root_path.rglob("*")):
-            if file_path.is_file():
-                count += 1
-                paths.append(str(file_path))
+            if not file_path.is_file():
+                continue
+            # Filter placeholder sentinels and 0-byte files so an empty
+            # evidence root (containing only .gitkeep) is not silently
+            # counted as real IPCAT evidence.
+            if file_path.name == ".gitkeep":
+                continue
+            try:
+                if file_path.stat().st_size == 0:
+                    continue
+            except OSError:
+                continue
+            count += 1
+            paths.append(str(file_path))
         discovered_inputs.append(f"evidence_roots.{root_key}")
         if count == 0:
             ambiguities.append(f"evidence_roots[{root_key}] directory is empty: {root_path}")
