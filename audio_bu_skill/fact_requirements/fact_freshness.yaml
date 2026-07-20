@@ -1,0 +1,71 @@
+# Phase-3A WP-D — Fact freshness (TTL) policy.
+#
+# Static, per-authority TTL policy consumed by the Coverage Engine (WP-F)
+# to derive a fact's freshness_state (FRESH / STALE / EXPIRED / UNKNOWN).
+# Phase-3A does no auto-refresh; the engine only reports state.
+#
+# Field semantics (all values are seconds since fact.captured_at):
+#   fresh_seconds    → within this window: FRESH.
+#   stale_seconds    → after fresh_seconds but within this window: STALE.
+#   expired_seconds  → after this window: EXPIRED.
+#
+# Any field may be null → "never crosses that threshold".
+# Monotonicity is enforced by the loader (fresh ≤ stale ≤ expired).
+#
+# NOTE: These are Phase-3A defaults. WP-F tests should not hard-code these
+# numbers; if the values change here, tests should continue to pass.
+
+version: 1
+
+ttls:
+  # IPCAT live queries: short fresh window (an hour), STALE by 1 day,
+  # EXPIRED after a week — after that we should re-query.
+  ipcat_live:
+    fresh_seconds: 3600
+    stale_seconds: 86400
+    expired_seconds: 604800
+
+  # Cached IPCAT snapshots: longer fresh window because the snapshot itself
+  # is dated; STALE after a week, EXPIRED after a month.
+  ipcat_cached:
+    fresh_seconds: 86400
+    stale_seconds: 604800
+    expired_seconds: 2592000
+
+  # Schematic PDFs change per board rev — long fresh window.
+  schematic_pdf:
+    fresh_seconds: 2592000
+    stale_seconds: 15552000
+    expired_seconds: null
+
+  # Kernel DTS: tied to a source revision; fresh for a month, expired at 1yr.
+  kernel_dts:
+    fresh_seconds: 2592000
+    stale_seconds: 7776000
+    expired_seconds: 31536000
+
+  # Kernel bindings: docs change slower than DTS.
+  kernel_bindings:
+    fresh_seconds: 7776000
+    stale_seconds: 31536000
+    expired_seconds: null
+
+  # ACDB exports: calibration blob metadata; tied to an ACDB release.
+  acdb_export:
+    fresh_seconds: 2592000
+    stale_seconds: 15552000
+    expired_seconds: null
+
+  # Manual entries: require re-confirmation quarterly.
+  manual:
+    fresh_seconds: 604800
+    stale_seconds: 2592000
+    expired_seconds: 7776000
+
+  # Inferred: never fully "fresh"; STALE immediately, EXPIRED at 1 week.
+  # Coverage engine caps INFERRED-only critical families at WARN regardless
+  # of freshness (§5.2), so these numbers are informational.
+  inferred:
+    fresh_seconds: 0
+    stale_seconds: 604800
+    expired_seconds: 2592000
