@@ -1,0 +1,10 @@
+# Fact Registry runtime state — machine-local, regenerated per run.
+# Ignore the registry files, hash sidecars, and transient locks; keep this
+# directory alive in version control via README.md and this .gitignore only.
+*.json
+*.hash
+*.lock
+
+# Do not ignore the two checked-in scaffold files.
+!README.md
+!.gitignore
