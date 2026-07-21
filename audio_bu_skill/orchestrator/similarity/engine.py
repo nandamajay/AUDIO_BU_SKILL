@@ -25,6 +25,54 @@ WEIGHTS: dict[str, float] = {
     "soc": 0.05,
 }
 
+# Phase B — role-specific signal weights. The single WEIGHTS blend collapses two
+# functionally distinct donors (an ADSP/audio-stack donor and a sound-card/codec
+# donor) into one scalar, which is why a split target like Nord IQ-10 lands at a
+# muddy ~0.72 with a thin margin. These two dicts re-weight the SAME per-signal
+# scores from ``score()`` toward each role's decisive signals so each donor can
+# be ranked and graded independently. Each sums to 1.0; a signal absent from a
+# role dict simply doesn't count toward that role (``_overall`` renormalizes over
+# the signals that are both weighted AND defined, exactly as for WEIGHTS).
+ADSP_ROLE_SIGNALS: dict[str, float] = {
+    "audioreach": 0.40,
+    "power_domain_providers": 0.35,
+    "soc": 0.25,
+}
+SNDCARD_ROLE_SIGNALS: dict[str, float] = {
+    "codecs": 0.60,
+    "soundwire": 0.25,
+    "dt_compatibles": 0.15,
+}
+# Canonical role -> weight-dict map. Keys are the role-confidence keys used
+# throughout Phase B (also the generated_case / similarity_report keys).
+ROLE_SIGNALS: dict[str, dict[str, float]] = {
+    "adsp_stack": ADSP_ROLE_SIGNALS,
+    "sound_card": SNDCARD_ROLE_SIGNALS,
+}
+
+# Canonical role vocabulary + legacy-alias folding. Phase A landed with QGenie
+# tagging nearest_targets roles as "adsp_donor"/"soundcard_donor"; Phase B settled
+# on "adsp_stack"/"sound_card" as the canonical keys (they name the functional
+# role, not the donor relationship, and match the ROLE_SIGNALS keys that actually
+# drive per-role scoring). ``normalize_role`` folds the legacy aliases into the
+# canonical set at ingest so every downstream consumer sees ONE vocabulary; the
+# runner mirrors this map locally (it does not import the engine on the production
+# onboarding path). Canonical and unknown/empty strings pass through unchanged.
+CANONICAL_ROLES: tuple[str, ...] = ("adsp_stack", "sound_card")
+ROLE_ALIASES: dict[str, str] = {
+    "adsp_donor": "adsp_stack",
+    "soundcard_donor": "sound_card",
+}
+
+
+def normalize_role(role: str) -> str:
+    """Fold a possibly-legacy role string to the canonical vocabulary.
+
+    ``adsp_donor`` -> ``adsp_stack``; ``soundcard_donor`` -> ``sound_card``.
+    Canonical strings and unknown/empty strings are returned unchanged.
+    """
+    return ROLE_ALIASES.get(role, role)
+
 # Gating: a nearest-target is only auto-usable when it clears BOTH.
 MIN_SCORE = 0.75
 MIN_MARGIN = 0.10
@@ -97,11 +145,19 @@ def score(new: TargetProfile, other: TargetProfile) -> dict[str, float | None]:
     }
 
 
-def _overall(per_signal: dict[str, float | None]) -> float:
-    """Weighted mean over the signals that are defined (weights renormalized)."""
+def _overall(per_signal: dict[str, float | None], weights: dict[str, float] = WEIGHTS) -> float:
+    """Weighted mean over the signals that are defined (weights renormalized).
+
+    ``weights`` defaults to the blended WEIGHTS; Phase B passes a per-role weight
+    dict (ADSP_ROLE_SIGNALS / SNDCARD_ROLE_SIGNALS) to re-weight the same
+    per-signal scores toward one donor role. Renormalization is over the signals
+    present in ``weights`` AND defined in ``per_signal`` — so a role dict that
+    omits a signal, or a signal that is None (undetectable on both profiles),
+    simply drops out of that role's mean rather than counting as zero.
+    """
     num = 0.0
     denom = 0.0
-    for signal, weight in WEIGHTS.items():
+    for signal, weight in weights.items():
         val = per_signal.get(signal)
         if val is None:
             continue
@@ -152,3 +208,59 @@ def confidence(ranked: list[Ranked]) -> dict[str, Any]:
         "min_score": MIN_SCORE,
         "min_margin": MIN_MARGIN,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase B — per-role ranking and confidence
+#
+# The blended rank()/confidence() above answer "which one donor is nearest?".
+# For a split target that has TWO donors (an ADSP-stack donor and a sound-card
+# donor) that single answer is misleading: the codec signals and the ADSP
+# signals pull toward different candidates, so the blend lands between them at a
+# thin margin. rank_per_role()/role_confidence() re-rank the SAME candidates
+# once per role using ROLE_SIGNALS, so each donor is graded on the signals that
+# actually decide that role. This is additive and advisory — it does not replace
+# rank()/confidence() and drives no generation.
+# ---------------------------------------------------------------------------
+
+
+def rank_per_role(
+    new: TargetProfile, db: list[TargetProfile],
+    role_signals: dict[str, dict[str, float]] = ROLE_SIGNALS,
+) -> dict[str, list[Ranked]]:
+    """Rank DB candidates against ``new`` once per role, highest overall first.
+
+    Returns ``{role: [Ranked, ...]}`` for each role in ``role_signals``. The
+    per-signal scores are computed once per candidate (via ``score``) and then
+    re-weighted per role through ``_overall``, so the only thing that differs
+    between roles is which signals dominate the overall — the underlying
+    similarity is identical to what ``rank`` sees.
+    """
+    per_by_candidate = [(c, score(new, c)) for c in db]
+    out: dict[str, list[Ranked]] = {}
+    for role, weights in role_signals.items():
+        ranked = [
+            Ranked(
+                target_name=candidate.target_name,
+                overall=_overall(per, weights),
+                per_signal={k: (v if v is not None else -1.0) for k, v in per.items()},
+                cites=candidate.cites,
+            )
+            for candidate, per in per_by_candidate
+        ]
+        ranked.sort(key=lambda r: r.overall, reverse=True)
+        out[role] = ranked
+    return out
+
+
+def role_confidence(ranked_by_role: dict[str, list[Ranked]]) -> dict[str, dict[str, Any]]:
+    """Per-role confidence, one ``confidence()``-shaped block per role.
+
+    Returns ``{role: {"top", "score", "margin", "confidence", "low_confidence",
+    "min_score", "min_margin"}}`` — the exact shape ``confidence()`` returns,
+    computed independently for each role's ranking using the identical formula
+    (``top * (margin + MARGIN_FLOOR)`` clamped, gated on MIN_SCORE / MIN_MARGIN).
+    A role whose ranking is empty gets the same empty-ranking block ``confidence``
+    produces.
+    """
+    return {role: confidence(ranked) for role, ranked in ranked_by_role.items()}

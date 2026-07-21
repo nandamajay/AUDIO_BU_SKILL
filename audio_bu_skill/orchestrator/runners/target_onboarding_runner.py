@@ -47,6 +47,87 @@ def _resolve(workspace_root: Path, rel_or_abs: str) -> Path:
     return candidate if candidate.is_absolute() else (workspace_root / candidate)
 
 
+# Phase B — role-confidence thresholds/floor. Mirror the local engine's constants
+# (orchestrator.similarity.engine MIN_SCORE / MIN_MARGIN / MARGIN_FLOOR) so the
+# inline QGenie-path formula grades roles on the same scale the local-test engine
+# uses. Kept as local literals rather than importing the engine because the
+# production onboarding path is deliberately decoupled from the demoted local
+# similarity engine (the blended `confidence` block below is inline for the same
+# reason). If those engine constants ever change, update these to match.
+_ROLE_MIN_SCORE = 0.75
+_ROLE_MIN_MARGIN = 0.10
+_ROLE_MARGIN_FLOOR = 0.10
+
+# Canonical role vocabulary + legacy-alias folding (mirrors
+# orchestrator.similarity.engine.ROLE_ALIASES / normalize_role). Phase A shipped
+# QGenie tagging roles "adsp_donor"/"soundcard_donor"; Phase B canonicalized on
+# "adsp_stack"/"sound_card" (the keys the derivation and role_confidence use). We
+# fold the legacy aliases at the donor_targets ingest below so a legacy tag can't
+# silently miss the .get("adsp_stack")/.get("sound_card") derivation and collapse
+# to the blended top_name. Kept as a local literal for the same reason the role
+# thresholds are: the production onboarding path is decoupled from the demoted
+# local engine. If engine.ROLE_ALIASES changes, update this to match.
+_ROLE_ALIASES: dict[str, str] = {
+    "adsp_donor": "adsp_stack",
+    "soundcard_donor": "sound_card",
+}
+
+
+def _normalize_role(role: str) -> str:
+    """Fold a possibly-legacy role string to the canonical vocabulary.
+
+    ``adsp_donor`` -> ``adsp_stack``; ``soundcard_donor`` -> ``sound_card``.
+    Canonical and unknown/empty strings pass through unchanged.
+    """
+    return _ROLE_ALIASES.get(role, role)
+
+
+def _qgenie_role_confidence(
+    nearest: list[dict[str, Any]], donor_targets: dict[str, str]
+) -> dict[str, dict[str, Any]]:
+    """Per-role confidence for the QGenie-backed onboarding path (Phase B, advisory).
+
+    For each role in ``donor_targets`` (e.g. "adsp_stack", "sound_card"), grade
+    the donor QGenie tagged for that role against the *rest* of the ranked
+    candidates using the engine's confidence formula:
+
+        confidence = top * (margin + MARGIN_FLOOR), clamped to [0,1]
+        low_confidence = top < MIN_SCORE OR margin < MIN_MARGIN
+
+    where ``top`` is the role donor's QGenie score and ``margin`` is its lead
+    over the highest-scoring OTHER candidate. Returns a ``confidence()``-shaped
+    block per role. ``{}`` when no roles are tagged (all real data today) — the
+    same safe no-op as ``donor_targets`` itself.
+    """
+    if not donor_targets:
+        return {}
+    scores_by_name: dict[str, float] = {}
+    for nt in nearest:
+        name = nt.get("name", "")
+        if name and name not in scores_by_name:
+            scores_by_name[name] = float(nt.get("score") or 0.0)
+
+    out: dict[str, dict[str, Any]] = {}
+    for role, donor_name in donor_targets.items():
+        top = scores_by_name.get(donor_name, 0.0)
+        others = [s for n, s in scores_by_name.items() if n != donor_name]
+        second = max(others) if others else 0.0
+        margin = top - second
+        conf = max(0.0, min(1.0, top * (margin + _ROLE_MARGIN_FLOOR)))
+        low = (not donor_name) or top < _ROLE_MIN_SCORE or margin < _ROLE_MIN_MARGIN
+        out[role] = {
+            "top": donor_name or None,
+            "score": round(top, 4),
+            "margin": round(margin, 4),
+            "confidence": round(conf, 4),
+            "low_confidence": low,
+            "min_score": _ROLE_MIN_SCORE,
+            "min_margin": _ROLE_MIN_MARGIN,
+            "source": "qgenie",
+        }
+    return out
+
+
 def resolve_onboarding_task_spec(
     workspace_root: Path, target_name: str, kernel_source_path: str,
     evidence_roots: dict[str, str] | None = None,
@@ -364,9 +445,29 @@ def _map_analysis_to_envelope(
     top_score = ranked[0]["overall"] if ranked else 0.0
     second = ranked[1]["overall"] if len(ranked) > 1 else 0.0
 
+    # Phase A: role -> donor target from QGenie's optional per-entry role tags.
+    # Empty on any analysis whose nearest_targets carry no role (all real data
+    # today), so everything below falls back to the pre-Phase-B behavior. Role
+    # strings are normalized to the canonical vocabulary (adsp_donor->adsp_stack,
+    # soundcard_donor->sound_card) so a legacy Phase A tag can't silently miss the
+    # canonical .get() derivation below.
+    donor_targets: dict[str, str] = {}
+    for nt in nearest:
+        role = _normalize_role(nt.get("role", ""))
+        if role:
+            donor_targets[role] = nt.get("name", "")
+
     needs_review: list[str] = []
-    if top_name:
-        nearest_target = top_name
+    # Phase B nearest_target derivation: prefer the ADSP-stack donor, then the
+    # sound-card donor, then the blended top candidate. When QGenie tags no roles
+    # (donor_targets == {}), both .get() calls are None and this collapses to
+    # `top_name` — byte-for-byte the pre-Phase-B choice. inherit_from is left
+    # untouched (still keyed off top_name) per the Phase B "DO NOT CHANGE" list.
+    derived_nearest = (
+        donor_targets.get("adsp_stack") or donor_targets.get("sound_card") or top_name
+    )
+    if derived_nearest:
+        nearest_target = derived_nearest
         if low_confidence:
             needs_review.append(
                 f"nearest_target: low-confidence match (overall {overall_conf:.2f}) — confirm before trusting"
@@ -378,6 +479,13 @@ def _map_analysis_to_envelope(
     inherit_from = top_name if (top_name and not low_confidence) else ""
     if top_name and low_confidence:
         needs_review.append("inherit_from: left empty pending nearest_target confirmation")
+
+    # Phase B per-role confidence (advisory). Production scores come from QGenie's
+    # nearest_targets, not the local weighted engine, so this replicates the
+    # engine's confidence formula inline (as the blended `confidence` block below
+    # already does) rather than re-ranking TargetProfiles we don't have here.
+    # {} when no roles are tagged — the same safe no-op as donor_targets.
+    role_confidence = _qgenie_role_confidence(nearest, donor_targets)
 
     soc_val = (analysis.get("soc") or {}).get("value") or ""
     target_soc = soc_val or "UNKNOWN"
@@ -433,6 +541,8 @@ def _map_analysis_to_envelope(
         "nearest_target": nearest_target,
         "run_id": run_id,
         "inherit_from": inherit_from,
+        "donor_targets": donor_targets,
+        "role_confidence": role_confidence,
         "evidence_source": _DEFAULT_EVIDENCE_SOURCE,
         "evidence_roots": dict(evidence_roots),
         "kernel_source_path": kernel_source_path,
@@ -476,6 +586,7 @@ def _map_analysis_to_envelope(
         "similarity_report": {
             "ranked": ranked,
             "confidence": confidence,
+            "role_confidence": role_confidence,
             "weights": {"note": "QGenie reasoning — nearest-target scores are model-produced, not weighted-signal"},
         },
         "evidence_inventory": {

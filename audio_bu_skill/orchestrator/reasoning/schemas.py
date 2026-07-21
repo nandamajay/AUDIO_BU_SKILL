@@ -53,7 +53,17 @@ from typing import Any
 # validator. `citations` is now required on _NEAREST_TARGET_ITEM with minItems=1.
 # Backward-compat: all real stored artifacts and frozen test fixtures already
 # carry non-empty citations on nearest_targets (confirmed before this bump).
-ANALYSIS_SCHEMA_VERSION = "1.4.0"
+#
+# 1.5.0 (Phase A — donor decomposition): additive only — adds optional `role`
+# string field to `_NEAREST_TARGET_ITEM`. QGenie may tag a nearest_targets entry
+# with its functional role (canonical: "adsp_stack", "sound_card") so the
+# orchestrator can populate `donor_targets` in the generated case. Legacy Phase A
+# aliases ("adsp_donor", "soundcard_donor") are folded to the canonical vocabulary
+# at ingest by the runner (see target_onboarding_runner._normalize_role /
+# orchestrator.similarity.normalize_role). `role` is NOT in required[]: a response
+# without any role tags still validates (existing artifacts unaffected). Nothing
+# else changed.
+ANALYSIS_SCHEMA_VERSION = "1.5.0"
 
 # A finding that carries per-field confidence + citations. Reused for every
 # perception signal QGenie returns so the "cite everything" rule is uniform.
@@ -151,6 +161,12 @@ _NEAREST_TARGET_ITEM: dict[str, Any] = {
         # so QGenie's structured-output harness retries before the response reaches
         # the validator. Score=0 entries are exempt (not checked by the validator).
         "citations": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        # New in 1.5.0 (Phase A), optional: functional role of this nearest_targets
+        # entry (canonical: "adsp_stack", "sound_card"; legacy aliases "adsp_donor"/
+        # "soundcard_donor" are folded at ingest). When present, the orchestrator
+        # writes it into donor_targets{role: target_name} on the generated case.
+        # NOT in required[]: a response without role tags still validates.
+        "role": {"type": "string"},
     },
     "required": ["name", "score", "rationale", "citations"],
     "additionalProperties": True,

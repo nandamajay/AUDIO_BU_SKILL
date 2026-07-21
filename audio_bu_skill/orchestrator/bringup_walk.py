@@ -49,6 +49,7 @@ class BringupCase:
     # provenance / lineage
     case_version: str = "0.1.0"
     inherit_from: str = ""                              # parent target name, resolved by main.load_case
+    donor_targets: dict[str, str] = field(default_factory=dict)  # role -> target_name from QGenie nearest_targets
 
     # source_intake (INIT -> SCAFFOLD)
     power_model_source: str = ""

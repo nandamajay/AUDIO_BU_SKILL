@@ -77,8 +77,8 @@ _V1_3_STYLE_ANALYSIS = {
 
 
 def test_schema_version_bumped() -> None:
-    assert ANALYSIS_SCHEMA_VERSION == "1.4.0", ANALYSIS_SCHEMA_VERSION
-    print("PASS: ANALYSIS_SCHEMA_VERSION bumped to 1.4.0")
+    assert ANALYSIS_SCHEMA_VERSION == "1.5.0", ANALYSIS_SCHEMA_VERSION
+    print("PASS: ANALYSIS_SCHEMA_VERSION bumped to 1.5.0")
 
 
 def test_v1_0_style_analysis_still_validates() -> None:
@@ -254,6 +254,199 @@ def test_nearest_target_with_citations_validates() -> None:
     print("PASS: nearest_targets entry with non-empty citations validates")
 
 
+# ---------------------------------------------------------------------------
+# 1.5.0 (Phase A): nearest_targets role field — optional donor decomposition
+# ---------------------------------------------------------------------------
+
+def test_nearest_target_with_role_validates() -> None:
+    # A role-tagged nearest_targets entry must pass schema validation.
+    doc = {**_V1_0_STYLE_ANALYSIS,
+           "nearest_targets": [{"name": "sa8775p-ref", "score": 0.72, "rationale": "ADSP match",
+                                 "citations": ["kernel/sa8775p.dtsi"], "role": "adsp_stack"}]}
+    jsonschema.validate(instance=doc, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: nearest_targets entry with optional role field validates (1.5.0)")
+
+
+def test_nearest_target_without_role_still_validates() -> None:
+    # role is NOT in required[]: omitting it must not break validation.
+    doc = {**_V1_0_STYLE_ANALYSIS,
+           "nearest_targets": [{"name": "nord-iq10", "score": 0.4, "rationale": "shared ADSP",
+                                 "citations": ["kernel/fakesoc.dtsi"]}]}
+    # no "role" key present
+    assert "role" not in doc["nearest_targets"][0]
+    jsonschema.validate(instance=doc, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: nearest_targets entry without role still validates (role is optional)")
+
+
+def test_nearest_target_multiple_roles_in_list_validates() -> None:
+    # Mixed list: one entry with role, one without — both must validate.
+    doc = {**_V1_0_STYLE_ANALYSIS,
+           "nearest_targets": [
+               {"name": "sa8775p-ref", "score": 0.72, "rationale": "ADSP match",
+                "citations": ["kernel/sa8775p.dtsi"], "role": "adsp_stack"},
+               {"name": "qcs9100-ride", "score": 0.71, "rationale": "codec match",
+                "citations": ["kernel/qcs9100-ride.dtsi"], "role": "sound_card"},
+               {"name": "other-board", "score": 0.50, "rationale": "partial match",
+                "citations": ["kernel/other.dtsi"]},  # no role
+           ]}
+    jsonschema.validate(instance=doc, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: mixed nearest_targets list (role present/absent) validates")
+
+
+def test_runner_donor_targets_populated_from_roles() -> None:
+    # Exercise the runner's actual donor_targets ingest (via _normalize_role),
+    # not an inlined copy, so this test tracks the real code path. Legacy Phase A
+    # role tags ("adsp_donor"/"soundcard_donor") must be folded to the canonical
+    # vocabulary ("adsp_stack"/"sound_card") at ingest.
+    from orchestrator.runners.target_onboarding_runner import _normalize_role
+    nearest = [
+        {"name": "sa8775p-ref", "score": 0.72, "rationale": "ADSP", "citations": ["k.dtsi"],
+         "role": "adsp_donor"},
+        {"name": "qcs9100-ride", "score": 0.71, "rationale": "codecs", "citations": ["k.dtsi"],
+         "role": "soundcard_donor"},
+        {"name": "other-board", "score": 0.50, "rationale": "partial", "citations": ["k.dtsi"]},
+    ]
+    donor_targets: dict[str, str] = {}
+    for nt in nearest:
+        role = _normalize_role(nt.get("role", ""))
+        if role:
+            donor_targets[role] = nt.get("name", "")
+
+    # Legacy input, canonical output — the derivation keys off adsp_stack/sound_card.
+    assert donor_targets == {"adsp_stack": "sa8775p-ref", "sound_card": "qcs9100-ride"}, donor_targets
+    assert "other-board" not in donor_targets.values(), "no-role entry must not appear in donor_targets"
+    print("PASS: donor_targets populated + legacy roles folded to canonical vocabulary")
+
+
+def test_runner_donor_targets_empty_when_no_roles() -> None:
+    # When no nearest_targets entries carry a role field, donor_targets stays {}.
+    nearest = [
+        {"name": "sa8775p-ref", "score": 0.72, "rationale": "ADSP", "citations": ["k.dtsi"]},
+        {"name": "qcs9100-ride", "score": 0.71, "rationale": "codecs", "citations": ["k.dtsi"]},
+    ]
+    donor_targets: dict[str, str] = {}
+    for nt in nearest:
+        role = nt.get("role", "")
+        if role:
+            donor_targets[role] = nt.get("name", "")
+
+    assert donor_targets == {}, f"expected empty donor_targets, got {donor_targets}"
+    print("PASS: donor_targets stays {{}} when no role tags present (safe no-op for existing artifacts)")
+
+
+# ---------------------------------------------------------------------------
+# Phase B: role-specific confidence in the QGenie-backed runner path
+# ---------------------------------------------------------------------------
+
+def test_runner_role_confidence_empty_when_no_roles() -> None:
+    # The core backward-compat guarantee for Phase B: on any analysis whose
+    # nearest_targets carry no role (all real Nord/Eliza data today), the runner's
+    # _qgenie_role_confidence returns {} — a pure no-op, exactly like donor_targets.
+    from orchestrator.runners.target_onboarding_runner import _qgenie_role_confidence
+    nearest = [
+        {"name": "sa8775p", "score": 0.85, "role": None},
+        {"name": "qcs9100-ride", "score": 0.80, "role": None},
+    ]
+    assert _qgenie_role_confidence(nearest, {}) == {}
+    print("PASS: _qgenie_role_confidence is {{}} when no roles tagged (Phase B no-op on real data)")
+
+
+def test_runner_role_confidence_split_donor() -> None:
+    # Split-donor case: ADSP donor sa8775p (0.85), sound-card donor qcs9100-ride
+    # (0.80). Each role graded independently against the best OTHER candidate.
+    from orchestrator.runners.target_onboarding_runner import _qgenie_role_confidence
+    nearest = [
+        {"name": "sa8775p", "score": 0.85, "role": "adsp_stack"},
+        {"name": "qcs9100-ride", "score": 0.80, "role": "sound_card"},
+        {"name": "sc7280", "score": 0.30},
+    ]
+    donor_targets = {"adsp_stack": "sa8775p", "sound_card": "qcs9100-ride"}
+    rc = _qgenie_role_confidence(nearest, donor_targets)
+    assert set(rc) == {"adsp_stack", "sound_card"}, rc
+    # adsp_stack: top 0.85, best-other = 0.80 -> margin 0.05
+    assert rc["adsp_stack"]["top"] == "sa8775p"
+    assert rc["adsp_stack"]["score"] == 0.85
+    assert abs(rc["adsp_stack"]["margin"] - 0.05) < 1e-6, rc["adsp_stack"]
+    # sound_card: top 0.80, best-other = 0.85 (the adsp donor) -> margin -0.05
+    assert rc["sound_card"]["top"] == "qcs9100-ride"
+    assert abs(rc["sound_card"]["margin"] - (-0.05)) < 1e-6, rc["sound_card"]
+    # both below threshold -> low_confidence, and the formula is the shared one
+    for role, block in rc.items():
+        assert block["low_confidence"] is True, (role, block)
+        expected = max(0.0, min(1.0, block["score"] * (block["margin"] + 0.10)))
+        assert abs(block["confidence"] - round(expected, 4)) < 1e-6, (role, block)
+        assert block["source"] == "qgenie"
+        for key in ("top", "score", "margin", "confidence", "low_confidence", "min_score", "min_margin"):
+            assert key in block, (role, key)
+    print("PASS: _qgenie_role_confidence grades adsp_stack/sound_card donors independently")
+
+
+def test_runner_nearest_target_derivation() -> None:
+    # Phase B derivation: donor_targets.get("adsp_stack") or .get("sound_card") or top_name.
+    def derive(donor_targets: dict[str, str], top_name: str) -> str:
+        return (donor_targets.get("adsp_stack") or donor_targets.get("sound_card") or top_name)
+
+    # 1. no roles -> falls back to blended top_name (pre-Phase-B behavior, unchanged)
+    assert derive({}, "sa8775p") == "sa8775p"
+    # 2. adsp_stack present -> wins
+    assert derive({"adsp_stack": "sa8775p", "sound_card": "qcs9100-ride"}, "other") == "sa8775p"
+    # 3. only sound_card present -> sound_card wins
+    assert derive({"sound_card": "qcs9100-ride"}, "other") == "qcs9100-ride"
+    # 4. no roles AND no top_name -> empty (runner marks UNKNOWN downstream)
+    assert derive({}, "") == ""
+    print("PASS: nearest_target derivation prefers adsp_stack, then sound_card, then top_name")
+
+
+def test_runner_normalize_role_folds_legacy_aliases() -> None:
+    # The runner mirrors engine.normalize_role locally (production path is decoupled
+    # from the demoted local engine). Both must agree on the canonical folding.
+    from orchestrator.runners.target_onboarding_runner import _normalize_role
+    assert _normalize_role("adsp_donor") == "adsp_stack"
+    assert _normalize_role("soundcard_donor") == "sound_card"
+    assert _normalize_role("adsp_stack") == "adsp_stack"
+    assert _normalize_role("sound_card") == "sound_card"
+    assert _normalize_role("unknown") == "unknown"
+    assert _normalize_role("") == ""
+    # cross-check the runner's local map against the engine's canonical map
+    from orchestrator.similarity import normalize_role as engine_normalize
+    for legacy in ("adsp_donor", "soundcard_donor", "adsp_stack", "sound_card", "x", ""):
+        assert _normalize_role(legacy) == engine_normalize(legacy), legacy
+    print("PASS: runner _normalize_role folds legacy aliases and agrees with engine.normalize_role")
+
+
+def test_runner_legacy_roles_flow_through_derivation() -> None:
+    # End-to-end: QGenie emits LEGACY role tags -> normalization folds them ->
+    # donor_targets is keyed canonically -> the nearest_target derivation (which
+    # keys off adsp_stack/sound_card) picks the ADSP donor. Without folding this
+    # would silently miss and collapse to the blended top_name — the exact latent
+    # bug this review closes.
+    from orchestrator.runners.target_onboarding_runner import (
+        _normalize_role, _qgenie_role_confidence,
+    )
+    nearest = [
+        {"name": "sc7280", "score": 0.90, "role": None},              # blended top, no role
+        {"name": "sa8775p", "score": 0.85, "role": "adsp_donor"},     # legacy ADSP donor
+        {"name": "qcs9100-ride", "score": 0.80, "role": "soundcard_donor"},  # legacy sndcard donor
+    ]
+    donor_targets: dict[str, str] = {}
+    for nt in nearest:
+        role = _normalize_role(nt.get("role", ""))
+        if role:
+            donor_targets[role] = nt.get("name", "")
+    assert donor_targets == {"adsp_stack": "sa8775p", "sound_card": "qcs9100-ride"}, donor_targets
+
+    top_name = nearest[0]["name"]  # "sc7280" — highest blended score
+    derived = donor_targets.get("adsp_stack") or donor_targets.get("sound_card") or top_name
+    assert derived == "sa8775p", f"legacy adsp donor must win derivation, got {derived}"
+
+    # role_confidence is keyed canonically too, from the folded donor_targets
+    rc = _qgenie_role_confidence(nearest, donor_targets)
+    assert set(rc) == {"adsp_stack", "sound_card"}, rc
+    assert rc["adsp_stack"]["top"] == "sa8775p"
+    assert rc["sound_card"]["top"] == "qcs9100-ride"
+    print("PASS: legacy role tags fold through to canonical derivation + role_confidence")
+
+
 def main() -> None:
     test_schema_version_bumped()
     test_v1_0_style_analysis_still_validates()
@@ -273,6 +466,17 @@ def main() -> None:
     test_nearest_target_without_citations_rejected()
     test_nearest_target_with_empty_citations_rejected()
     test_nearest_target_with_citations_validates()
+    # 1.5.0 Phase A tests
+    test_nearest_target_with_role_validates()
+    test_nearest_target_without_role_still_validates()
+    test_nearest_target_multiple_roles_in_list_validates()
+    test_runner_donor_targets_populated_from_roles()
+    test_runner_donor_targets_empty_when_no_roles()
+    test_runner_normalize_role_folds_legacy_aliases()
+    test_runner_legacy_roles_flow_through_derivation()
+    test_runner_role_confidence_empty_when_no_roles()
+    test_runner_role_confidence_split_donor()
+    test_runner_nearest_target_derivation()
     print("ALL TESTS PASSED")
 
 
