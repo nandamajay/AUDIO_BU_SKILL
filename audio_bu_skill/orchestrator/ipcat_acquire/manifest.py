@@ -14,18 +14,20 @@ incomplete and acquisition must not publish it:
 
     1. chips_list_chips              {}
     2. cores_list_core_instances     {chip}
-    3. swi_search_swi                {chip, term=SOUNDWIRE_MASTER}   ┐ one entry
-    4. swi_search_swi                {chip, term=SWR_MSTR}           ├ per union
-    5. swi_search_swi                {chip, term=SWR}                ┘ term (W4)
-    6. gpio_get_gpio_map             {chip}
-    7. gpio_list_gpios_from_map      {gpio_map_id}
-    8. gpio_list_tlmm_gpios          {chip}
-    9. chipio_get_qups               {chip}
-   10. buses_list_buses              {chip}
+    3. swi_search_swi                {chip, query=SOUNDWIRE_MASTER}  ┐ one entry
+    4. swi_search_swi                {chip, query=SWR_MSTR}          ┘ per union term (W4)
+    5. gpio_get_gpio_map             {chip}
+    6. gpio_list_gpios_from_map      {gpio_map_id}
+    7. gpio_list_tlmm_gpios          {chip}
+    8. chipio_get_qups               {chip}
+    9. buses_list_buses              {chip}
 
-(The three ``swi_search_swi`` entries collapse to a *single* logical query in
-provenance — the union-term W4 count — but are three distinct manifest entries
-because each is a separate ``tools/call``.)
+(The two ``swi_search_swi`` entries collapse to a *single* logical query in
+provenance — the union-term W4 count — but are two distinct manifest entries
+because each is a separate ``tools/call``. A bare ``SWR`` term was deliberately
+excluded: it substring-matches non-SoundWire ``*_SWRESET`` register blocks and
+adds no unique legitimate master, so it only saturated the cap — see
+:data:`SWI_UNION_TERMS`.)
 
 **Optional (2) — provenance-only.** Acquired for audit context when reachable;
 their absence never blocks publication:
@@ -61,7 +63,14 @@ GPIO_MAP_ID = "{gpio_map_id}"
 # W4 discipline: swi_search_swi is capped + relevance-ranked and its
 # ``total_hits`` is unreliable, so a count is only trusted when the union of
 # these terms yields a set-stable, below-cap result (design §3.1 count_method).
-SWI_UNION_TERMS: tuple[str, ...] = ("SOUNDWIRE_MASTER", "SWR_MSTR", "SWR")
+#
+# The bare term ``SWR`` was dropped: it substring-matched non-SoundWire
+# ``*_SWRESET`` register blocks (VCODEC/DDRPHY), saturating the 25-row cap on
+# I2S-only targets (Nord) and tripping a false CAPPED_SEARCH, while adding **no
+# unique legitimate master** on targets that do have SoundWire — every real
+# master register block ends in ``_SOUNDWIRE_MASTER`` (caught by the first
+# term) and the LPASS ones also contain ``SWR_MSTR`` (caught by the second).
+SWI_UNION_TERMS: tuple[str, ...] = ("SOUNDWIRE_MASTER", "SWR_MSTR")
 
 
 @dataclass(frozen=True)
@@ -107,21 +116,15 @@ NORD_MANIFEST: tuple[ManifestEntry, ...] = (
     ),
     ManifestEntry(
         tool="swi_search_swi",
-        args={"chip": CHIP, "q": "SOUNDWIRE_MASTER"},
+        args={"chip": CHIP, "query": "SOUNDWIRE_MASTER"},
         query_id="q3a",
         result_file="swi_search_swi__soundwire_master.json",
     ),
     ManifestEntry(
         tool="swi_search_swi",
-        args={"chip": CHIP, "q": "SWR_MSTR"},
+        args={"chip": CHIP, "query": "SWR_MSTR"},
         query_id="q3b",
         result_file="swi_search_swi__swr_mstr.json",
-    ),
-    ManifestEntry(
-        tool="swi_search_swi",
-        args={"chip": CHIP, "q": "SWR"},
-        query_id="q3c",
-        result_file="swi_search_swi__swr.json",
     ),
     ManifestEntry(
         tool="gpio_get_gpio_map",

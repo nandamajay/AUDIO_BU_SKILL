@@ -127,13 +127,13 @@ def test_optional_tool_identity() -> None:
 
 
 def test_manifest_total_entries() -> None:
-    """T-IA-13e: 12 total entries (10 logical tools, 3 swi entries)."""
+    """T-IA-13e: 11 total entries (10 logical tools, 2 swi entries)."""
     from orchestrator.ipcat_acquire.manifest import NORD_MANIFEST
-    assert len(NORD_MANIFEST) == 12, (
-        f"T-IA-13e: expected 12 manifest entries (3 swi + 9 others), "
+    assert len(NORD_MANIFEST) == 11, (
+        f"T-IA-13e: expected 11 manifest entries (2 swi + 9 others), "
         f"got {len(NORD_MANIFEST)}"
     )
-    print("PASS T-IA-13e: NORD_MANIFEST has 12 entries (3 swi_search_swi + 9 others)")
+    print("PASS T-IA-13e: NORD_MANIFEST has 11 entries (2 swi_search_swi + 9 others)")
 
 
 def test_mandatory_optional_partition_is_disjoint() -> None:
