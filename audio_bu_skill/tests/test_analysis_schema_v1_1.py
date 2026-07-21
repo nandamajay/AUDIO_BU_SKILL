@@ -6,6 +6,10 @@ no q6apm/q6prm) still validates, a 1.1.0-shaped analysis (with them) also
 validates, and the skill's schema.json still accepts the exact same
 generated_case shape produced before this slice (no new required fields).
 
+Also covers the 1.4.0 nearest_targets citation contract: every scored
+nearest_targets entry must carry a non-empty citations list (schema-level
+enforcement, mirrors the FINDING_MISSING_CITATION validator rule).
+
 Run: PYTHONPATH=audio_bu_skill python3 -m tests.test_analysis_schema_v1_1
 (or: python3 audio_bu_skill/tests/test_analysis_schema_v1_1.py)
 """
@@ -29,7 +33,8 @@ _V1_0_STYLE_ANALYSIS = {
     "soc": {"value": "SA8797P", "confidence": 0.9, "citations": ["kernel/fakesoc.dtsi"]},
     "codecs": [{"part": "WSA8845", "confidence": 0.8, "citations": ["evidence/WSA8845.pdf"]}],
     "power_model": {"kind": "rpmhpd", "confidence": 0.6, "citations": [], "needs_review": True},
-    "nearest_targets": [{"name": "nord-iq10", "score": 0.4, "rationale": "shared ADSP", "citations": []}],
+    "nearest_targets": [{"name": "nord-iq10", "score": 0.4, "rationale": "shared ADSP",
+                          "citations": ["kernel/fakesoc.dtsi"]}],
     "missing_evidence": [], "overall_confidence": 0.7, "human_review_needed": True,
 }
 
@@ -72,8 +77,8 @@ _V1_3_STYLE_ANALYSIS = {
 
 
 def test_schema_version_bumped() -> None:
-    assert ANALYSIS_SCHEMA_VERSION == "1.3.0", ANALYSIS_SCHEMA_VERSION
-    print("PASS: ANALYSIS_SCHEMA_VERSION bumped to 1.3.0")
+    assert ANALYSIS_SCHEMA_VERSION == "1.4.0", ANALYSIS_SCHEMA_VERSION
+    print("PASS: ANALYSIS_SCHEMA_VERSION bumped to 1.4.0")
 
 
 def test_v1_0_style_analysis_still_validates() -> None:
@@ -214,6 +219,41 @@ def test_skill_schema_json_still_valid_json_and_backward_compatible() -> None:
           "pre-slice-5 output shape still satisfies it")
 
 
+def test_nearest_target_without_citations_rejected() -> None:
+    # 1.4.0: citations is now required with minItems=1 on nearest_targets items.
+    # A scored entry with citations absent must be rejected by the schema.
+    bad = {**_V1_0_STYLE_ANALYSIS,
+           "nearest_targets": [{"name": "nord-iq10", "score": 0.4, "rationale": "shared ADSP"}]}
+    try:
+        jsonschema.validate(instance=bad, schema=ANALYSIS_SCHEMA)
+        raise AssertionError("expected rejection of nearest_targets entry missing citations")
+    except jsonschema.ValidationError:
+        pass
+    print("PASS: nearest_targets entry missing citations field is rejected (1.4.0 contract)")
+
+
+def test_nearest_target_with_empty_citations_rejected() -> None:
+    # An empty citations list is as unauditable as an absent one — also rejected.
+    bad = {**_V1_0_STYLE_ANALYSIS,
+           "nearest_targets": [{"name": "nord-iq10", "score": 0.4, "rationale": "shared ADSP",
+                                 "citations": []}]}
+    try:
+        jsonschema.validate(instance=bad, schema=ANALYSIS_SCHEMA)
+        raise AssertionError("expected rejection of nearest_targets entry with citations: []")
+    except jsonschema.ValidationError:
+        pass
+    print("PASS: nearest_targets entry with citations: [] is rejected (minItems=1)")
+
+
+def test_nearest_target_with_citations_validates() -> None:
+    # The positive case: a non-empty citations list satisfies both schema and validator.
+    doc = {**_V1_0_STYLE_ANALYSIS,
+           "nearest_targets": [{"name": "nord-iq10", "score": 0.4, "rationale": "shared ADSP",
+                                 "citations": ["kernel/fakesoc.dtsi"]}]}
+    jsonschema.validate(instance=doc, schema=ANALYSIS_SCHEMA)  # must not raise
+    print("PASS: nearest_targets entry with non-empty citations validates")
+
+
 def main() -> None:
     test_schema_version_bumped()
     test_v1_0_style_analysis_still_validates()
@@ -230,6 +270,9 @@ def main() -> None:
     test_schematic_nets_missing_gpio_rejected()
     test_stored_1_2_0_target_artifacts_still_validate()
     test_skill_schema_json_still_valid_json_and_backward_compatible()
+    test_nearest_target_without_citations_rejected()
+    test_nearest_target_with_empty_citations_rejected()
+    test_nearest_target_with_citations_validates()
     print("ALL TESTS PASSED")
 
 

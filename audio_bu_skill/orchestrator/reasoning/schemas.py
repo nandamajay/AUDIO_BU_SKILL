@@ -45,7 +45,15 @@ from typing import Any
 # list-lengths. `catalog` is declared but always null pre-SWI so the post-SWI
 # upgrade stays additive. Nothing required changed; a 1.2.0-shaped response
 # (no element_counts) still validates.
-ANALYSIS_SCHEMA_VERSION = "1.3.0"
+#
+# 1.4.0: closes schema/validator gap on nearest_targets citations. The validator
+# already required non-empty citations on every scored nearest_targets entry
+# (FINDING_MISSING_CITATION); the schema now enforces the same contract so
+# QGenie's structured-output harness retries before the response reaches the
+# validator. `citations` is now required on _NEAREST_TARGET_ITEM with minItems=1.
+# Backward-compat: all real stored artifacts and frozen test fixtures already
+# carry non-empty citations on nearest_targets (confirmed before this bump).
+ANALYSIS_SCHEMA_VERSION = "1.4.0"
 
 # A finding that carries per-field confidence + citations. Reused for every
 # perception signal QGenie returns so the "cite everything" rule is uniform.
@@ -138,9 +146,13 @@ _NEAREST_TARGET_ITEM: dict[str, Any] = {
         "name": {"type": "string"},
         "score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         "rationale": {"type": "string"},
-        "citations": {"type": "array", "items": {"type": "string"}},
+        # minItems=1: a scored ranking with no evidence pointer is not auditable.
+        # Mirrors the validator rule (FINDING_MISSING_CITATION) at the schema layer
+        # so QGenie's structured-output harness retries before the response reaches
+        # the validator. Score=0 entries are exempt (not checked by the validator).
+        "citations": {"type": "array", "items": {"type": "string"}, "minItems": 1},
     },
-    "required": ["name", "score", "rationale"],
+    "required": ["name", "score", "rationale", "citations"],
     "additionalProperties": True,
 }
 
