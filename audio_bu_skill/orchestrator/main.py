@@ -70,6 +70,8 @@ TARGETS_ROOT = WORKSPACE_ROOT / "audio_bu_skill" / "targets"
 
 KERNEL_REQUIRED_SUBDIRS = ("arch", "drivers", "sound", "Documentation")
 
+_IPCAT_SUPPORTED_MECHANISMS: frozenset[str] = frozenset({"A"})
+
 
 # --------------------------------------------------------------------------- #
 # case loading + inheritance
@@ -147,6 +149,13 @@ def parse_args() -> argparse.Namespace:
                       help="compare current inputs against artifacts/<run_id>/ fingerprints (REPEATABLE / DRIFT DETECTED)")
     mode.add_argument("--onboard", metavar="TARGET",
                       help="onboard a new target: detect nearest target + write targets/<target>/case.generated.py (never case.py)")
+    mode.add_argument("--refresh-ipcat-cache", metavar="TARGET",
+                      help="materialise IPCAT evidence cache for TARGET without running generation")
+    parser.add_argument("--ipcat-chip", metavar="ALIAS", default=None,
+                        help="override chip alias/id for IPCAT query (default: resolved from case.target_soc)")
+    parser.add_argument("--ipcat-mechanism", metavar="MECHANISM", default=None,
+                        help="acquisition transport mechanism; currently supported: 'A' (dedicated-token MCP); "
+                             "required with --refresh-ipcat-cache")
     parser.add_argument("--evidence-source", choices=EVIDENCE_SOURCES, default=None,
                         help="override the case's evidence_source (default: use the case's own value)")
     parser.add_argument("--kernel-source", default=None,
@@ -165,12 +174,14 @@ def parse_args() -> argparse.Namespace:
                         help="With --generate: render the ## Generation report (path_hints) but write no "
                              "artifact bytes to disk — truly side-effect-free (nothing under generated/<run_id>/)")
     args = parser.parse_args()
-    if not (args.target or args.replay or args.rerun or args.onboard):
-        parser.error("one of --target, --replay, --rerun, or --onboard is required")
+    if not (args.target or args.replay or args.rerun or args.onboard
+            or args.refresh_ipcat_cache):
+        parser.error("one of --target, --replay, --rerun, --onboard, "
+                     "or --refresh-ipcat-cache is required")
     if args.analysis_engine == "local-test" and not args.test_mode:
         parser.error("--analysis-engine local-test requires --test-mode (no silent local fallback in production)")
-    if args.dry_run and not args.generate:
-        parser.error("--dry-run requires --generate (it gates only the generation write step)")
+    if args.dry_run and not args.generate and not args.refresh_ipcat_cache:
+        parser.error("--dry-run requires --generate or --refresh-ipcat-cache")
     return args
 
 
@@ -1568,8 +1579,57 @@ def _render_onboarding_report(output: dict) -> str:
     return "\n".join(lines)
 
 
+def resolve_ipcat_evidence_dir(target: str) -> Path:
+    return Path(__file__).parent.parent / "targets" / target / "evidence" / "ipcat"
+
+
+def do_refresh_ipcat_cache(
+    target: str,
+    *,
+    chip_alias: str | None,
+    mechanism: str | None,
+    dry_run: bool = False,
+) -> int:
+    if mechanism not in _IPCAT_SUPPORTED_MECHANISMS:
+        print(
+            f"--ipcat-mechanism: unsupported value {mechanism!r}. "
+            f"Supported: {sorted(_IPCAT_SUPPORTED_MECHANISMS)}"
+        )
+        return 3
+
+    evidence_ipcat_dir = resolve_ipcat_evidence_dir(target)
+
+    if chip_alias is None:
+        case = load_case(target)
+        chip_alias = case.target_soc
+
+    from orchestrator.ipcat_acquire import acquire_to_cache  # local import — inertness guarantee
+    from orchestrator.ipcat_acquire.errors import AcquireStatus, classify_error
+
+    try:
+        result = acquire_to_cache(
+            target=target,
+            chip_alias=chip_alias,
+            mechanism=mechanism,
+            evidence_ipcat_dir=evidence_ipcat_dir,
+            dry_run=dry_run,
+        )
+    except Exception as exc:  # transport/config failure before session established
+        print(f"ipcat-acquire: {AcquireStatus.TRANSPORT_ERROR.value}  {classify_error(exc)}")
+        return 3
+    print(f"ipcat-acquire: {result.status.value}  {result.message}")
+    return result.exit_code
+
+
 def main() -> None:
     args = parse_args()
+    if args.refresh_ipcat_cache:
+        sys.exit(do_refresh_ipcat_cache(
+            args.refresh_ipcat_cache,
+            chip_alias=args.ipcat_chip,
+            mechanism=args.ipcat_mechanism,
+            dry_run=args.dry_run,
+        ))
     if args.replay:
         do_replay(args.replay)
         return
