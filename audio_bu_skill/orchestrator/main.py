@@ -684,13 +684,13 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
     _record_onboarding_artifacts(target=target, run_id=run_id, attempt=attempt,
                                   kernel_source=kernel_source, output=output, orchestrator=orchestrator)
 
-    conf = output["similarity_report"]["confidence"]
-    top = conf.get("top") or "(none)"
-    print(f"  nearest target : {top}  (score {conf.get('score')}, confidence {conf.get('confidence')})")
-    if output.get("human_review_needed"):
-        print("  HUMAN REVIEW NEEDED — see NEEDS_REVIEW in onboarding_report.md")
-    print(f"  wrote proposal artifacts to {target_dir}")
-    print(f"  NEXT: review case.generated.py, then `mv {target_dir}/case.generated.py {target_dir}/case.py` to activate")
+    # WP-MCP-BANNER commit 4/4 (G-3A.6): the old unconditional print block
+    # printed "wrote proposal artifacts to …" regardless of whether
+    # cross-verify actually completed — a degraded run was
+    # indistinguishable from a healthy one at the terminal. The emitter
+    # inspects snapshot_provenance.mcp_state and suppresses the false
+    # success line on degraded/empty runs while still exiting 0 (advisory).
+    print(_render_terminal_summary(output, target_dir=target_dir))
 
 
 def _write_reasoning_error_artifact(target_dir: Path, exc: ReasoningUnavailableError) -> None:
@@ -1405,6 +1405,94 @@ def _render_mcp_banner_section(gc: dict) -> list[str]:
         f"**{label}** — {detail}",
         "",
     ]
+
+
+def _render_terminal_summary(output: dict, *, target_dir=None) -> str:
+    """WP-MCP-BANNER (G-3A.6): degraded-aware terminal summary.
+
+    Replaces the unconditional stdout print block that formerly lived at
+    ``do_onboard`` right after ``_record_onboarding_artifacts``. The block
+    printed ``wrote proposal artifacts to …`` regardless of whether
+    cross-verify actually completed — a degraded run was
+    indistinguishable from a healthy one at the terminal.
+
+    Contract (§4 rule: advisory, not blocking):
+      * Return a ``str`` — never raise (T-MCP-4 asserts non-fatal).
+      * Read ``mcp_state`` from
+        ``output["generated_case"]["cross_verification"]["snapshot_provenance"]``
+        (populated by WP-MCP-BANNER commit 2/4). Missing / unrecognised
+        values are treated as EMPTY.
+      * On ``mcp_state == "degraded"`` or ``"empty"``: suppress the
+        ``wrote proposal artifacts to …`` line and emit a visible
+        ``[DEGRADED]`` / ``[EMPTY]`` label instead. The artifacts *were*
+        written (do_onboard's ``_write_onboarding_artifacts`` runs
+        earlier and unconditionally); we simply refuse to claim
+        success in a way that's indistinguishable from a healthy run.
+      * ``target_dir`` is keyword-only and optional so callers with
+        just an ``output`` dict (tests, offline re-renders) can invoke
+        without threading a path. When ``None``, path-dependent lines
+        (``wrote proposal artifacts to …``, ``NEXT: …``) are omitted.
+
+    Pure — null-guarded, no I/O, deterministic for a fixed input.
+    """
+    lines: list[str] = []
+
+    # Nearest-target line — unchanged from the old block, kept first so
+    # existing terminal-scroll habits still find it in the top slot.
+    conf = ((output or {}).get("similarity_report") or {}).get("confidence") or {}
+    top = conf.get("top") or "(none)"
+    lines.append(
+        f"  nearest target : {top}  (score {conf.get('score')}, "
+        f"confidence {conf.get('confidence')})"
+    )
+    if (output or {}).get("human_review_needed"):
+        lines.append(
+            "  HUMAN REVIEW NEEDED — see NEEDS_REVIEW in onboarding_report.md"
+        )
+
+    # Extract mcp_state via the same read path as _render_mcp_banner_section.
+    # Any deviation between these two readers is a bug (banner would say OK
+    # while summary says DEGRADED, or vice versa) — keep them structurally
+    # identical.
+    gc = (output or {}).get("generated_case") or {}
+    cv = gc.get("cross_verification") if isinstance(gc, dict) else None
+    provenance = cv.get("snapshot_provenance") if isinstance(cv, dict) else None
+    mcp_state = (
+        provenance.get("mcp_state") if isinstance(provenance, dict) else None
+    )
+    if mcp_state not in ("ok", "degraded", "empty"):
+        mcp_state = None  # unknown / not stitched — behave like OK
+
+    if mcp_state == "degraded":
+        lines.append(
+            "  [DEGRADED] MCP/authority partial — proposal artifacts written "
+            "but authority-side evidence is incomplete; treat verdicts as "
+            "advisory. See the `## MCP / Authority Status` section in "
+            "onboarding_report.md for details."
+        )
+    elif mcp_state == "empty":
+        lines.append(
+            "  [EMPTY] Cross-verification did not run — no MCP/authority "
+            "evidence is available for this run; verdicts are advisory only."
+        )
+    else:
+        # ok state (or unknown) → keep the original success line, but only
+        # when we actually have a target_dir to name. This mirrors the old
+        # print block's behaviour when the pipeline succeeded end-to-end.
+        if target_dir is not None:
+            lines.append(f"  wrote proposal artifacts to {target_dir}")
+
+    # NEXT hint is path-dependent — only emit when we have a target_dir.
+    # Still emitted on degraded/empty because the artifacts *were* written;
+    # the operator should still be able to activate them if they choose.
+    if target_dir is not None:
+        lines.append(
+            f"  NEXT: review case.generated.py, then "
+            f"`mv {target_dir}/case.generated.py {target_dir}/case.py` "
+            "to activate"
+        )
+
+    return "\n".join(lines)
 
 
 def _render_generation_section(gc: dict) -> list[str]:
