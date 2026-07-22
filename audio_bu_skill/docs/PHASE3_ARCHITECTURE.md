@@ -1,8 +1,14 @@
 # Phase-3A Architecture Refinement — Fact Coverage Authority Framework
 
 **Status:** Refined architecture proposal — implementation-ready for Phase-3A only.
-**Date:** 2026-07-18
+**Date:** 2026-07-18 (WP-F sections synchronized 2026-07-22).
 **Supersedes:** the prior Phase-3 architecture proposal (WP-D through WP-P) in this same file.
+**Superseded in part by:** `docs/WP_F_DESIGN_REVISION.md` (2026-07-22). That revision
+answers the WP-F design review's blocking/high findings and is **normative** for WP-F.
+Where this file and the revision disagree on WP-F, the revision wins; §4.2/§4.4/§4.5,
+§5.3/§5.5, §7.2, and §8's WP-F block have been edited to match it. The revision's core
+change: the coverage **denominator comes from a per-target Expected-Subject Manifest
+(ESM)**, `targets/<target>/expected_subjects.json`, never from catalog-pattern cardinality.
 **Scope discipline:** design only. No file modifications outside this document. No promotion changes.
 
 ---
@@ -31,7 +37,7 @@ Additionally, the 100%-for-most-critical-families threshold table was not eviden
 | C4 | **ManualFact / ExternalAuthorityFact is a wrapper**, not just an authority enum | Manual facts need reviewer, ticket, expiry, and evidence-of-review captured; a bare `authority=MANUAL` string invites laundering |
 | C5 | **Phase-3A is advisory only** | No gates, no acquisition, no backfill. Ship the diagnostic; use two weeks of real reports to justify the next phase |
 | C6 | **Registry-absent behavior** is a first-class state | Existing runs without a registry file must not error; report renders "coverage unknown — registry not populated" and legacy sections stay authoritative |
-| C7 | **WP-C cardinality integration** deferred one phase | Coupling Coverage to WP-C's expected-subject counts now creates a hard dependency. Phase-3A enumerates expected subjects from the catalog only; WP-C comes in via a later phase |
+| C7 | **WP-C cardinality integration** deferred one phase | Coupling Coverage to WP-C's expected-subject counts now creates a hard dependency. Phase-3A takes the coverage denominator from a per-target **Expected-Subject Manifest** (ESM, `targets/<target>/expected_subjects.json`, see §4.5 / `WP_F_DESIGN_REVISION.md` §1), **not** from catalog-pattern cardinality (catalog subjects are regex patterns with no fixed count) and **not** from WP-C. WP-C integration as a denominator source comes in a later phase |
 
 ---
 
@@ -88,6 +94,7 @@ FactValue :=
     freshness_state   : FRESH | STALE | EXPIRED | UNKNOWN     # derived at load
     coverage_state    : PRESENT | PARTIAL | ABSENT | INVALIDATED
     conflict_state    : NONE | CONFLICT | RESOLVED             # see 4.4
+    corroboration_state : SOLE | CORROBORATED | MISMATCH       # see 4.4; orthogonal to conflict
     review            : ReviewRecord | null                     # required for MANUAL
     provenance_chain  : [FactProvenance, ...]                   # append-only history
 
@@ -125,33 +132,87 @@ A `conflict_state = CONFLICT` means: **two or more provenance entries in this fa
 
 Conflicts never silently pick a winner. Until reviewed, a conflicting fact contributes `coverage_state=PARTIAL` regardless of the authority strengths — the operator must decide.
 
+**Conflict vs. corroboration (per `WP_F_DESIGN_REVISION.md` §2, normative).** `conflict_state`
+and `corroboration_state` are **orthogonal axes** and must not be folded together:
+
+- **`conflict_state = CONFLICT`** is reserved for **same-tier disagreement on the identical
+  `FactKey`** (subject + attribute) — two sources of comparable authority asserting different
+  values. This is blocking-relevant: it drives `conflict_debt` and forces `coverage_state=PARTIAL`
+  until a `ReviewRecord` resolves it. Nothing else contributes to `conflict_debt`.
+- **`corroboration_state`** records cross-source *agreement or non-blocking divergence* on a
+  subject, mapping the trust doctrine's Tier-2 (`PHASE3_LANDSCAPE.md` §1):
+  - **`SOLE`** — exactly one source has spoken for this subject (e.g. IPCAT alone). Not stronger,
+    not weaker; simply uncorroborated.
+  - **`CORROBORATED`** — two independent sources **agree** (e.g. IPCAT-direct + schematic
+    confirms). Strictly stronger than SOLE; surfaced so the report can credit corroboration that
+    the old model was blind to (review finding C-2).
+  - **`MISMATCH`** — the doctrine's `IPCAT-DIRECT+MISMATCH` (Tier-2 level 3): IPCAT and schematic
+    disagree, **IPCAT wins the emission**, and the divergence is flagged **non-blocking**. A
+    MISMATCH is **not** a CONFLICT: it does **not** enter `conflict_debt`, does **not** force
+    PARTIAL, and does **not** require a `ReviewRecord`. It is rendered in its own corroboration
+    column so a Tier-2 flag is neither lost (ignored) nor over-escalated (treated as a hard
+    conflict). This resolves review finding C-1 (MISMATCH previously had no axis home).
+
 ### 4.5 FamilyCoverage — with all four axes
 
 ```
 FamilyCoverage :=
     family                  : str                      # domain-qualified
     domain                  : Domain enum
-    required_subjects       : int                      # mandatory subjects per catalog
+    required_subjects       : int | null               # |required(F,T)| from the ESM (see below); null when ESM_MISSING
+    present_subjects        : int                      # subset of required with a live FactValue (non-inferred)
+    surplus_subjects        : int                      # facts present but NOT in the ESM's required set — reported, never counted in coverage
     optional_subjects       : int                      # advisory subjects (reported separately)
-    present_subjects        : int                      # coverage_state=PRESENT and non-inferred
     partial_subjects        : int                      # coverage_state=PARTIAL (incl. conflicts)
     stale_subjects          : int                      # freshness_state in {STALE, EXPIRED}
     absent_subjects         : int                      # required but no fact recorded
     inferred_subjects       : int                      # authority_class=INFERRED
     manual_subjects         : int                      # authority_class=MANUAL
     conflicting_subjects    : int                      # conflict_state=CONFLICT (unresolved)
-    coverage_pct            : float
-    optional_coverage_pct   : float
-    confidence_score        : float                    # weighted mean of subject confidences
+    corroborated_subjects   : int                      # corroboration_state=CORROBORATED
+    mismatch_subjects       : int                      # corroboration_state=MISMATCH (non-blocking)
+    esm_state               : PRESENT | ESM_MISSING | ESM_DECLARED_EMPTY
+    mandatory_subject_coverage_pct : float | null      # |present|/|required|; null (n/a) when |required|=0 or ESM_MISSING
+    confidence_score        : float                    # weighted mean of PRESENT subjects' confidences
     freshness_debt          : int                      # count of stale/expired critical subjects
     inferred_debt           : int                      # inferred_subjects in critical family
-    conflict_debt           : int                      # conflicting_subjects
-    verdict                 : PASS | WARN | FAIL       # Phase-3A: informational only
-    threshold_used          : float
+    conflict_debt           : int                      # conflicting_subjects (CONFLICT only — never MISMATCH)
+    verdict                 : OBSERVED_COMPLETE | OBSERVED_PARTIAL | OBSERVED_GAP | OBSERVED_ADVISORY | OBSERVED_BLOCKED   # observation only; not a gate
     critical                : bool
 ```
 
-Debt fields are additive per-family metrics that make the "coverage isn't quality" story readable in the report. A family can be 100% covered with `inferred_debt = 3` and `conflict_debt = 1` — a very different position from 100% covered with all zeros.
+**Denominator rule (ESM-based; `WP_F_DESIGN_REVISION.md` §1, normative — supersedes the original
+catalog-derived count).** The coverage denominator comes from a per-target **Expected-Subject
+Manifest** (ESM), `targets/<target>/expected_subjects.json`, **not** from catalog-pattern
+cardinality. Catalog subjects are regex patterns (e.g. `MI2S[0-9]+_(SCK|WS|SD0|SD1|SD2|SD3)`) with
+**no fixed count**, so a catalog-derived denominator produces vacuous `present/present = 100%` on
+trivial evidence (review findings M-1 / F-1 / H-1, blocking). The ESM breaks this:
+
+- `required(F,T)` = the ESM's declared expected subjects for family `F` on target `T` whose catalog
+  requiredness is `MANDATORY`.
+- `present(F,T)` = the subset of `required(F,T)` that has a live `FactValue`. By construction
+  **`present ⊆ required` always** — a fact can never push coverage above its declared denominator.
+- `surplus` = facts present but **not** in `required(F,T)`. Surplus is reported in
+  `surplus_subjects` and **never** enters `coverage_pct` — it cannot inflate coverage.
+- `absent` = `required ∖ present`.
+- `mandatory_subject_coverage_pct = |present| / |required|`, **defined only when `|required| > 0`**.
+  When `|required| = 0` (ESM_DECLARED_EMPTY) or the target has no ESM entry (ESM_MISSING), the
+  value is **`null` (rendered `n/a`) — never `100%`**. A zero-requirement or unknown family can
+  therefore never read as "complete."
+
+**ESM states.**
+- **`ESM_MISSING`** — no ESM entry exists for this target/family (nothing declared what THIS board
+  uses). Denominator is unknown; `mandatory_subject_coverage_pct = null`; verdict `OBSERVED_BLOCKED`
+  (cannot judge completeness). This is the correct floor for the G-3A.1 empty/hand-seeded registry
+  case — an unmeasurable family is never silently green.
+- **`ESM_DECLARED_EMPTY`** — a human has explicitly declared zero required subjects for this
+  family on this target (e.g. SMMU_SID when no DMA is in use). Denominator is a *declared* `0`;
+  verdict `OBSERVED_ADVISORY` (nothing to cover, and we know it). Distinct from ESM_MISSING: empty
+  is a decision, missing is an absence of decision.
+
+Debt fields are additive per-family metrics that make the "coverage isn't quality" story readable
+in the report. A family can be `OBSERVED_COMPLETE` with `inferred_debt = 3` and `conflict_debt = 1`
+— a very different position from complete with all zeros.
 
 ---
 
@@ -161,17 +222,20 @@ Debt fields are additive per-family metrics that make the "coverage isn't qualit
 
 | Axis | Question | Data source | Where it lives |
 |---|---|---|---|
-| **Coverage** | Do we have a value for every required subject? | `coverage_state` per subject | `FamilyCoverage.coverage_pct` |
+| **Coverage** | Do we have a value for every required subject? | `coverage_state` per subject, denominator from the ESM (§4.5) | `FamilyCoverage.mandatory_subject_coverage_pct` |
 | **Freshness** | Is the value we have still valid? | derived `freshness_state` from `captured_at` + TTL policy | `FamilyCoverage.stale_subjects` |
 | **Confidence** | How strongly do we believe each value? | `FactValue.confidence` + `authority_class` | `FamilyCoverage.confidence_score`, `inferred_debt` |
-| **Conflict** | Do authorities disagree? | `FactValue.conflict_state` per subject | `FamilyCoverage.conflict_debt` |
+| **Conflict** | Do same-tier authorities disagree? | `FactValue.conflict_state` per subject | `FamilyCoverage.conflict_debt` |
 
-The four axes are surfaced separately in the report. Phase-3A **never** collapses them into a single "green/red" number.
+The four axes are surfaced separately in the report. Phase-3A **never** collapses them into a
+single "green/red" number. `corroboration_state` (SOLE / CORROBORATED / MISMATCH, §4.4) is a
+fifth per-subject signal rendered in its own column; it is orthogonal to all four axes and, in
+particular, MISMATCH never feeds the Conflict axis.
 
 ### 5.2 INFERRED facts and critical families
 
 - INFERRED facts **count toward coverage** for their subject (i.e., contribute to `present_subjects`), but only when no PRIMARY / FALLBACK / MANUAL fact is available.
-- INFERRED facts in a **critical family** contribute to `inferred_debt` and the family verdict is capped at WARN, never PASS, until an authoritative fact replaces them.
+- INFERRED facts in a **critical family** contribute to `inferred_debt` and the family verdict is capped at `OBSERVED_PARTIAL`, never `OBSERVED_COMPLETE`, until an authoritative fact replaces them.
 - Design invariant: **INFERRED cannot alone satisfy a critical family's coverage requirement**. This is enforced in the Coverage Engine's family-verdict computation and covered by an explicit test in WP-F.
 
 ### 5.3 Confidence score computation
@@ -187,6 +251,20 @@ weight(subject) := 3.0 if authority_class == PRIMARY
 ```
 
 Conflicting subjects contribute weight zero — they neither raise nor lower the mean; they show up separately as `conflict_debt`. This prevents a hot conflict from bumping the number.
+
+**Authority ≠ confidence (deliberate inversion; `WP_F_DESIGN_REVISION.md` §2).** These weights
+key off `authority_class` (a confidence axis) and are intentionally *not* the emission-trust order
+of `PHASE3_LANDSCAPE.md` §4. A reviewed MANUAL fact weights `1.5` — below FALLBACK's `2.0` — even
+though REVIEWER-INPUT is the *highest* emission authority. This is not an accident of two tables: a
+human's resolved decision is the final word on **what to emit**, but our *confidence* in an
+unverifiable manual value is bounded (a MANUAL fact whose review carries no external evidence is
+capped at `0.4`, per `orchestrator/fact_registry/models.py`). Authority governs emission; the
+confidence weight governs the confidence axis; they are allowed to disagree by design.
+
+`confidence_score` is a weighted mean over **PRESENT** subjects only — it says nothing about absent
+ones (review finding M-2). It must therefore never be rendered alone: the report binds it
+inseparably to the coverage fraction and the conflict column (see §7.2) so a high confidence over
+one present subject can never be mistaken for family completeness.
 
 ### 5.4 Freshness policy for Phase-3A
 
@@ -209,27 +287,38 @@ SubjectRequirement :=
     notes               : str
 ```
 
-**Family-level `threshold_used`** becomes `mandatory_subject_coverage_pct` — the fraction of MANDATORY subjects covered. It is reported but does not enforce anything in Phase-3A.
+**Family-level `threshold_used`** is removed. It is replaced by `mandatory_subject_coverage_pct`
+— `|present| / |required|` where `required` is the **ESM-declared** mandatory set for THIS target
+(§4.5), not a catalog-pattern count. It is reported, never enforced in Phase-3A, and is **`n/a`
+(null) whenever `|required| = 0` or the ESM is missing** — never `100%`.
 
-Revised per-family judgment (Phase-3A: advisory only; future-phase gate guidance in the last column):
+Revised per-family judgment (Phase-3A: observation only; future-phase gate guidance in the last column):
 
 | Family | Domain | MANDATORY subjects (examples) | Advisory subjects | Future gate posture |
 |---|---|---|---|---|
-| `GPIO` | Audio | I2S data/word/bit clks in use, primary MCLK, codec reset | SPK PA enable, headset detect | 100% mandatory subjects; advisory reported separately |
-| `QUP` | Audio | codec's I2C bus and address | unused QUPs | 100% mandatory |
-| `CLOCK` | Audio | LPASS aud_ref_clk, MI2S BCLK/WCLK in use, codec MCLK | ancillary clocks | 100% mandatory; advisory reported |
-| `POWER` | Audio | codec AVDD/DVDD, LPASS core rail (LCX/LMX) | secondary supplies | 100% mandatory |
-| `SMMU_SID` | Audio | ADSP DMA carveout SID (if DMA in use) | offload SIDs | 100% mandatory when DMA is in use; N/A otherwise |
-| `ADSP_REG_BASE` | Audio | PAS base, QDSP6SS base | subsystem sysmgr | 100% mandatory |
-| `AUDIOREACH_PORT` | Audio | logical port IDs for the bring-up config | unused ports | 100% mandatory |
-| `INTERCONNECT` | Audio | LPASS-CC path in use | ancillary hops | 100% of paths in use |
-| `CODEC_BINDING` | Audio | regmap I2C addr, reset GPIO, primary supplies | secondary features | 100% mandatory |
-| `DSP_TOPOLOGY` | Audio | (none MANDATORY at Phase-3A) | subgraphs, calibration keys | Advisory only; not a promotion gate |
-| `MBHC_THRESHOLD` | Audio | (none) | detect trip points | Advisory only |
+| `GPIO` | Audio | I2S data/word/bit clks in use, primary MCLK, codec reset | SPK PA enable, headset detect | ESM-declared mandatory set; advisory reported separately |
+| `QUP` | Audio | codec's I2C bus and address | unused QUPs | ESM-declared mandatory set |
+| `CLOCK` | Audio | LPASS aud_ref_clk, MI2S BCLK/WCLK in use, codec MCLK | ancillary clocks | ESM-declared mandatory set; advisory reported |
+| `POWER` | Audio | codec AVDD/DVDD, LPASS core rail (LCX/LMX) | secondary supplies | ESM-declared mandatory set |
+| `SMMU_SID` | Audio | ADSP DMA carveout SID (if DMA in use) | offload SIDs | ESM mandatory when DMA in use; ESM_DECLARED_EMPTY (→ n/a) otherwise |
+| `ADSP_REG_BASE` | Audio | PAS base, QDSP6SS base | subsystem sysmgr | ESM-declared mandatory set |
+| `AUDIOREACH_PORT` | Audio | logical port IDs for the bring-up config | unused ports | ESM-declared mandatory set |
+| `INTERCONNECT` | Audio | LPASS-CC path in use | ancillary hops | ESM-declared paths in use |
+| `CODEC_BINDING` | Audio | regmap I2C addr, reset GPIO, primary supplies | secondary features | ESM-declared mandatory set |
+| `DSP_TOPOLOGY` | Audio | (none MANDATORY at Phase-3A) → ESM_DECLARED_EMPTY | subgraphs, calibration keys | `OBSERVED_ADVISORY`; not a promotion gate |
+| `MBHC_THRESHOLD` | Audio | (none) → ESM_DECLARED_EMPTY | detect trip points | `OBSERVED_ADVISORY` |
+
+**Zero-mandatory families render distinctly (review finding F-3).** `DSP_TOPOLOGY` and
+`MBHC_THRESHOLD` have no mandatory subjects, so their `mandatory_subject_coverage_pct` is `n/a` and
+their verdict is `OBSERVED_ADVISORY` — **never** `OBSERVED_COMPLETE`/`100%`. Advisory green must be
+visually distinct from earned green so a reader never conflates "nothing to cover" with "everything
+covered."
 
 Key rule: **generation-relevant ≠ promotion-relevant.** DSP_TOPOLOGY and MBHC are generation-relevant (their absence produces stub code) but not promotion-relevant (their absence should not block promoting `case.generated.py` because generation can still emit reasonable stubs with FIXMEs).
 
-**Phase-3A stance:** every threshold above is **informational only**. No gate reads it. The point of Phase-3A is to *observe* the numbers on Nord/Eliza/Shikra before committing to enforcement.
+**Phase-3A stance:** every judgment above is **observation only**, spelled in the observation
+vocabulary (§7.2), not enforcement words. No gate reads it. The point of Phase-3A is to *observe*
+the numbers on Nord/Eliza/Shikra before committing to enforcement.
 
 ---
 
@@ -267,8 +356,16 @@ Design invariants:
 ### 6.3 Manual facts in critical families
 
 A manual fact **can** satisfy a critical-family subject's coverage, but:
-- The family verdict is capped at WARN (never PASS) if `manual_subjects > 0` in Phase-3A.
+- The family verdict is capped at `OBSERVED_PARTIAL` (never `OBSERVED_COMPLETE`) if `manual_subjects > 0` in Phase-3A.
 - The report explicitly lists the reviewer and ticket for each manual fact in the critical family, so an operator sees exactly who owns each such claim.
+
+**Deliberate doctrinal tension with an expiry (`WP_F_DESIGN_REVISION.md` §2).** The emission-trust
+doctrine (`PHASE3_LANDSCAPE.md` §4) ranks REVIEWER-INPUT as the *highest* authority, yet coverage
+caps a manual-satisfied critical family at `OBSERVED_PARTIAL`. This is an intentional Phase-3A
+conservatism (authority ≠ confidence, §5.3), **not** a contradiction: a reviewed fact is
+authoritative for *what to emit* but is held below "observed complete" for *coverage* until the
+policy that lets a reviewed fact earn OBSERVED_COMPLETE is defined. That policy is deferred; the cap
+expires when a later phase specifies when a REVIEWER-INPUT fact counts as complete.
 
 Rationale: manual evidence is often the only path for team-owned facts (power-domain index, SMMU SID confirmation) but that path must be visible and revocable, not laundered as "just another authority."
 
@@ -307,42 +404,70 @@ The onboarding report currently contains, in order:
 
 ### 7.2 Section structure
 
+The section leads with a **mandatory registry-provenance banner** (`WP_F_DESIGN_REVISION.md` §3):
+it states the registry population state so a reader can never mistake a partially hand-seeded
+registry for a complete one (review finding F-2, G-3A.1). The banner is computed, not hand-typed,
+and its state ties to the WP7 tri-state:
+
+- **`EMPTY`** — no facts recorded → every family renders `OBSERVED_BLOCKED`. Correlates with
+  `NO_IPCAT_EVIDENCE`.
+- **`HAND_SEEDED`** — facts exist but none carry an `IPCATLiveRef` (populated by hand / manual
+  review during Phase-3A per G-3A.1). Correlates with `CACHED_IPCAT_ONLY` at best.
+- **`IPCAT_POPULATED`** — at least one fact carries an `IPCATLiveRef` (`LIVE_IPCAT_VERIFIED`
+  reachable). Only possible once G-3A.1's live-acquisition path exists; in Phase-3A this state is
+  effectively unreachable and is documented for forward-compat.
+
+The banner is a **blocking gate for external sharing**: no CoverageReport leaves the team without
+it rendered.
+
 ```
 ## Fact Coverage
 Registry: audio_bu_skill/state/fact_registry/<target>.json  (loaded | absent | corrupt)
+Registry population: EMPTY | HAND_SEEDED | IPCAT_POPULATED       ← mandatory provenance banner
 Total facts recorded: N   (PRIMARY=n1  FALLBACK=n2  MANUAL=n3  INFERRED=n4)
-Overall (Phase-3A advisory): PROMOTE_READY | ADVISORY | BLOCKED
+Observation (Phase-3A; NOT a gate): OBSERVED_COMPLETE | OBSERVED_PARTIAL | OBSERVED_GAP | OBSERVED_ADVISORY | OBSERVED_BLOCKED
 
 ### Per-family coverage
-| Family              | Domain | Mandatory | Present | Partial | Absent | Stale | Inferred | Manual | Conflict | Coverage | Confidence | Verdict |
-|---------------------|--------|----------:|--------:|--------:|-------:|------:|---------:|-------:|---------:|---------:|-----------:|--------:|
-| Audio.GPIO          | Audio  |        7  |      7  |      0  |     0  |    0  |      0   |     0  |       0  |    100%  |      0.92  |  PASS   |
-| Audio.POWER         | Audio  |        5  |      2  |      1  |     2  |    0  |      1   |     0  |       0  |     40%  |      0.55  |  FAIL   |
-| Audio.SMMU_SID      | Audio  |        1  |      0  |      0  |     1  |    0  |      0   |     0  |       0  |      0%  |      0.00  |  FAIL   |
-| Audio.AUDIOREACH_PORT | Audio |      4  |      2  |      1  |     1  |    0  |      1   |     1  |       0  |     50%  |      0.60  |  WARN   |
+Rendering contract (WP_F_DESIGN_REVISION.md §4): coverage is shown as a fraction present/required
+(never a bare %), confidence is annotated "[of the N present]" so it can never be read as
+completeness, the Conflict column counts only same-tier CONFLICT, and the Corrob column carries
+SOLE/CORROBORATED/MISMATCH separately. Families with |required|=0 render coverage as `n/a` and
+verdict `OBSERVED_ADVISORY`, visually distinct from earned completeness.
 
-### Missing facts (mandatory)
+| Family              | Domain | Coverage (present/required) | Confidence [of present] | Conflict | Corrob | Surplus | ESM | Verdict |
+|---------------------|--------|------------------------------|-------------------------|---------:|--------|--------:|-----|---------|
+| Audio.GPIO          | Audio  | 7/7                          | 0.92 [of 7]             |       0  | 7 CORROB | 0     | PRESENT | OBSERVED_COMPLETE |
+| Audio.POWER         | Audio  | 2/5                          | 0.55 [of 2]             |       0  | 2 SOLE | 0       | PRESENT | OBSERVED_GAP |
+| Audio.SMMU_SID      | Audio  | n/a (0 required)             | n/a                     |       0  | —      | 0       | ESM_DECLARED_EMPTY | OBSERVED_ADVISORY |
+| Audio.AUDIOREACH_PORT | Audio | 2/4                         | 0.60 [of 2]             |       0  | 1 MISMATCH | 1     | PRESENT | OBSERVED_PARTIAL |
+| Audio.DSP_TOPOLOGY  | Audio  | n/a (0 required)             | n/a                     |       0  | —      | 0       | ESM_DECLARED_EMPTY | OBSERVED_ADVISORY |
+| Audio.CLOCK         | Audio  | ?  (denominator unknown)     | 0.80 [of 3]             |       0  | 3 SOLE | 0       | ESM_MISSING | OBSERVED_BLOCKED |
+
+### Missing facts (mandatory, from the ESM)
 - Audio.POWER / VDD_LCX / regulator_name           (primary authority: IPCAT_LIVE or IPCAT_CACHED)
 - Audio.POWER / VDD_LMX / regulator_name           (primary authority: IPCAT_LIVE or IPCAT_CACHED)
-- Audio.SMMU_SID / adsp_dma_carveout / sid         (primary authority: IPCAT_LIVE or IPCAT_CACHED)
 - Audio.AUDIOREACH_PORT / I2S8 / logical_port_id   (primary authority: IPCAT_LIVE or IPCAT_CACHED)
+
+### Surplus facts (present but not in the ESM — never counted toward coverage)
+- Audio.AUDIOREACH_PORT / I2S3 / logical_port_id   (recorded, but not declared expected for this target)
 
 ### Debt summary
 - Freshness debt (stale/expired mandatory subjects): 0
 - Inferred debt (INFERRED in critical family):        2
-- Conflict debt (unresolved cross-authority):         0
+- Conflict debt (unresolved same-tier CONFLICT):      0   (MISMATCH is NOT counted here)
 
 ### Manual / External Authority facts
 | Subject | Reviewer | Ticket | Answered | Expires | Status |
 |---------|----------|--------|----------|---------|--------|
 | Audio.AUDIOREACH_PORT / I2S8 / logical_port_id | audioreach-owner@... | AR-1234 | 2026-07-10 | 2026-10-10 | valid |
 
-### Conflicts (unresolved)
+### Conflicts (unresolved, same-tier)
 _none_
 
 ### Notes
-- Advisory only in Phase-3A. Does not affect promotion, WP7 verdict, or IPCAT tri-state.
-- See §Coverage rules and §Confidence weights for interpretation.
+- Observation only in Phase-3A. Does not affect promotion, WP7 verdict, or IPCAT tri-state.
+- OBSERVED_* are observation words, not gate results — see §5.5 and WP_F_DESIGN_REVISION.md §5.
+- See §4.5 (ESM denominator), §5.3 (confidence weights), §4.4 (conflict vs corroboration).
 ```
 
 ### 7.3 Registry-absent behavior
@@ -364,7 +489,7 @@ No coverage evaluation performed. Existing IPCAT Coverage, Confidence Ledger, an
 - Every existing section header is preserved verbatim.
 - Existing grep patterns (`NEEDS_REVIEW`, `NO_IPCAT_EVIDENCE`, `no_source_facts_available`, `Overall verdict`) continue to match unchanged sections.
 - New section uses unique anchors (`## Fact Coverage`, `### Per-family coverage`, etc.).
-- The verdict word `Overall (Phase-3A advisory):` is deliberately distinct from WP7's `Overall verdict:` to prevent grep confusion.
+- The observation line `Observation (Phase-3A; NOT a gate):` is deliberately distinct from WP7's `Overall verdict:` to prevent grep confusion, and uses observation vocabulary (OBSERVED_*) so it can never be mistaken for a gate result.
 
 ---
 
@@ -463,45 +588,55 @@ No coverage evaluation performed. Existing IPCAT Coverage, Confidence Ledger, an
 
 **Files created:**
 - `audio_bu_skill/orchestrator/coverage/__init__.py`
-- `audio_bu_skill/orchestrator/coverage/engine.py` — `evaluate(catalog, registry) -> CoverageReport`.
-- `audio_bu_skill/orchestrator/coverage/models.py` — `CoverageReport`, `FamilyCoverage`, `SubjectCoverage`, `DebtSummary`, `ConflictRow`, `ManualRow`.
+- `audio_bu_skill/orchestrator/coverage/engine.py` — `evaluate(catalog, registry, esm) -> CoverageReport`. The ESM (`WP_F_DESIGN_REVISION.md` §1) is a required input: it supplies the per-target denominator. WP-F **reads** the ESM (`targets/<target>/expected_subjects.json`); it does not build it (the ESM builder is out-of-scope, §9).
+- `audio_bu_skill/orchestrator/coverage/models.py` — `CoverageReport`, `FamilyCoverage`, `SubjectCoverage`, `DebtSummary`, `ConflictRow`, `ManualRow`, `ESMState`.
+- `audio_bu_skill/orchestrator/coverage/esm.py` — pure loader/validator for `expected_subjects.json`; returns the required-subject set per family, or `ESM_MISSING` / `ESM_DECLARED_EMPTY`.
 - `audio_bu_skill/orchestrator/coverage/freshness.py` — pure functions computing `freshness_state` from `captured_at` + policy.
-- `audio_bu_skill/orchestrator/coverage/conflict.py` — pure functions detecting conflicts across provenance chains.
-- `audio_bu_skill/orchestrator/coverage/confidence.py` — weighted-mean confidence per family.
+- `audio_bu_skill/orchestrator/coverage/conflict.py` — pure functions detecting same-tier conflicts across provenance chains, and classifying corroboration_state (SOLE / CORROBORATED / MISMATCH).
+- `audio_bu_skill/orchestrator/coverage/confidence.py` — weighted-mean confidence over PRESENT subjects per family.
 - `audio_bu_skill/tests/test_coverage_engine.py`
 - `audio_bu_skill/tests/test_coverage_freshness.py`
 - `audio_bu_skill/tests/test_coverage_conflict.py`
 - `audio_bu_skill/tests/test_coverage_confidence.py`
-- `audio_bu_skill/tests/fixtures/coverage/` — curated registry fixtures (all-present, missing-power, inferred-only, conflict, manual, stale).
+- `audio_bu_skill/tests/fixtures/coverage/` — curated registry fixtures **paired with target-specific ESM fixtures** (all-present, missing-power, inferred-only, conflict, manual, stale, surplus, esm-missing, esm-declared-empty, mismatch, corroborated). Every fixture with a coverage assertion carries an ESM with **≥ 2 required subjects and a genuine gap** so no test can pass on a vacuous denominator.
 
 **Files NOT touched:** everything outside `coverage/` and its tests.
 
-**Inputs:** Catalog, Registry.
+**Inputs:** Catalog, Registry, ESM.
 
 **Outputs:** `CoverageReport` — pure data.
 
 **Tests (critical invariants):**
-- **T-F1:** All-mandatory-present → `verdict=PASS`, `coverage_pct=100%`.
-- **T-F2:** One mandatory missing → `verdict=FAIL` for critical family.
-- **T-F3:** All mandatory present with INFERRED-only → `verdict=WARN`, `inferred_debt > 0`. Critical families with only INFERRED evidence must **not** be PASS.
-- **T-F4:** Conflict on any subject → subject's `coverage_state=PARTIAL`, family `conflict_debt >= 1`, family verdict at most WARN.
-- **T-F5:** Manual fact with valid `review` → contributes to coverage, family verdict at most WARN in Phase-3A, `manual_subjects >= 1`.
+- **T-F-DENOM (anti-vacuity, the blocking invariant):** the coverage denominator equals `|required(F,T)|` read from the ESM, and is **byte-stable** w.r.t. the number of matched facts. Adding, removing, or duplicating facts never changes the denominator. Encodes the theorem in `WP_F_DESIGN_REVISION.md` §6: coverage is `present/required`, `present ⊆ required`, so `100%` is reachable **only** when every ESM-declared required subject has a live fact — never from `present/present`.
+- **T-F-VACUOUS:** a family with facts present but an ESM declaring **more** required subjects than are present reports `< 100%` (never 100%). A registry that lights up one lucky GPIO fact against a 6-subject ESM reads `1/6`, not complete.
+- **T-F-ESM-MISSING:** a family with no ESM entry → `esm_state=ESM_MISSING`, `mandatory_subject_coverage_pct=null`, `verdict=OBSERVED_BLOCKED`. Never silently green.
+- **T-F-DECLARED-EMPTY:** a family whose ESM declares zero required subjects → `esm_state=ESM_DECLARED_EMPTY`, `mandatory_subject_coverage_pct=null` (n/a, **not** 100%), `verdict=OBSERVED_ADVISORY`.
+- **T-F-SURPLUS:** a fact present but not in the ESM's required set → counted in `surplus_subjects`, listed in the surplus section, and **excluded** from `mandatory_subject_coverage_pct` (cannot inflate coverage).
+- **T-F-MISMATCH:** an IPCAT/schematic disagreement on a subject → `corroboration_state=MISMATCH`, IPCAT value wins the coverage entry, `conflict_debt` **unchanged** (MISMATCH is not a CONFLICT), verdict not escalated to GAP by the mismatch alone.
+- **T-F-CORROBORATED:** two independent agreeing sources on a subject → `corroboration_state=CORROBORATED`, `corroborated_subjects >= 1`, distinct from SOLE.
+- **T-F1:** All ESM-required subjects present (fixture ESM has **≥ 2** required subjects) → `verdict=OBSERVED_COMPLETE`, `mandatory_subject_coverage_pct=100%`. The fixture's required set is target-specific and non-vacuous.
+- **T-F2:** One ESM-required subject missing → `verdict=OBSERVED_GAP` for a critical family.
+- **T-F3:** All ESM-required present but INFERRED-only → `verdict=OBSERVED_PARTIAL`, `inferred_debt > 0`. Critical families with only INFERRED evidence must **not** be OBSERVED_COMPLETE.
+- **T-F4:** Same-tier CONFLICT on any subject → subject's `coverage_state=PARTIAL`, family `conflict_debt >= 1`, family verdict at most OBSERVED_PARTIAL.
+- **T-F5:** Manual fact with valid `review` → contributes to coverage, family verdict at most OBSERVED_PARTIAL in Phase-3A, `manual_subjects >= 1`.
 - **T-F6:** Manual fact without review → rejected at store layer (WP-E test); Coverage Engine never sees it.
-- **T-F7:** Stale fact → `stale_subjects >= 1`, contributes to coverage, family verdict at most WARN.
+- **T-F7:** Stale fact → `stale_subjects >= 1`, contributes to coverage, family verdict at most OBSERVED_PARTIAL.
 - **T-F8:** Expired fact → same as stale but shows in `expired_facts` list.
-- **T-F9:** Empty registry → all families report `absent_subjects = required_subjects`, `verdict=FAIL` for critical, `overall_verdict=BLOCKED`.
+- **T-F9:** Empty registry (but ESM present) → all families report `absent_subjects = required_subjects`, `verdict=OBSERVED_GAP` for critical, registry population banner `EMPTY`, and every family whose ESM is also missing reads `OBSERVED_BLOCKED`.
 - **T-F10:** Missing registry file → engine returns a `CoverageReport(status='registry_absent')` — never raises.
-- **T-F11:** Monotonicity: adding a PRIMARY fact for a currently-absent subject can only increase (never decrease) `coverage_pct` and can only decrease (never increase) any debt count. Property-tested with a random-order fixture generator.
+- **T-F11:** Monotonicity, strengthened: on a fixture whose ESM has a **genuine gap** (starts **below 100%**), adding a PRIMARY fact for a currently-absent *required* subject raises `mandatory_subject_coverage_pct` **from below 100% toward 100%** (never decreases) and can only decrease debt; the **denominator is asserted byte-stable** across the sequence. Property-tested with a random-order fixture generator. (Rules out the "monotonic but pinned at 100%" degenerate case flagged in review finding M-5.)
 
 **Exit criteria:**
-- All T-F* pass.
+- All T-F* pass, including the anti-vacuity trio (T-F-DENOM, T-F-VACUOUS, T-F11 rise-from-below-100%).
+- A reviewer has signed the denominator-provenance gate (`WP_F_DESIGN_REVISION.md` §7): the denominator for at least one regex family (GPIO) on Nord is confirmed **ESM-sourced, target-specific**, not matched-fact count.
 - Coverage engine has no dependency on `orchestrator/runners/*` (import-graph test).
-- Coverage engine has no dependency on `targets/*` (import-graph test).
+- Coverage engine has no dependency on `targets/*` code (import-graph test) — it reads `targets/<target>/expected_subjects.json` as data only.
 - Engine returns in <100ms for a fully-populated Nord registry (perf test with fixture).
 
 **Risks:**
 - **R-F1:** Silent downgrade — engine mis-labels PARTIAL as PRESENT under some corner. Mitigated by T-F3, T-F4, T-F11.
 - **R-F2:** Confidence-weight regression — a change to the weight table silently shifts `confidence_score`. Mitigated by golden-value tests on curated fixtures.
+- **R-F3:** ESM absent or stale for a target → engine must render `ESM_MISSING`/`OBSERVED_BLOCKED`, never fabricate a denominator. Mitigated by T-F-ESM-MISSING and the mandatory provenance banner.
 
 **What must not change:**
 - No changes to any existing runner, report renderer, or promotion logic.
@@ -533,7 +668,9 @@ No coverage evaluation performed. Existing IPCAT Coverage, Confidence Ledger, an
 - **T-G3:** Golden render for `manual-with-review` fixture matches.
 - **T-G4:** Golden render for `conflict` fixture matches.
 - **T-G5:** Golden render for `registry-absent` produces the exact stub in §7.3.
-- **T-G6:** Existing greps still pass — `grep -n "NEEDS_REVIEW\|NO_IPCAT_EVIDENCE\|no_source_facts_available\|Overall verdict"` on a rendered report finds the same lines as before, plus no extras (the new section uses `Overall (Phase-3A advisory):` deliberately).
+- **T-G-BANNER:** the mandatory registry-provenance banner (`Registry population: EMPTY | HAND_SEEDED | IPCAT_POPULATED`, §7.2) renders on **every** non-absent report; a golden fixture asserts each of the three banner states. A report that would render without the banner fails this test (the banner is a blocking gate for external sharing, `WP_F_DESIGN_REVISION.md` §3).
+- **T-G-VOCAB:** rendered verdicts use only the observation vocabulary (OBSERVED_COMPLETE/PARTIAL/GAP/ADVISORY/BLOCKED); a grep for `\bPASS\b|\bWARN\b|\bFAIL\b` in the rendered `## Fact Coverage` section finds nothing.
+- **T-G6:** Existing greps still pass — `grep -n "NEEDS_REVIEW\|NO_IPCAT_EVIDENCE\|no_source_facts_available\|Overall verdict"` on a rendered report finds the same lines as before, plus no extras (the new section uses `Observation (Phase-3A; NOT a gate):` deliberately, and the observation vocabulary OBSERVED_* never collides with WP7's `Overall verdict:`).
 - **T-G7:** Nord onboarding smoke test: full `--onboard nord-iq10 --generate` run completes; report contains `## Fact Coverage`; no other section is altered; IPCAT tri-state is unchanged; WP7 verdict is unchanged; promotion is unchanged; `case.generated.py` is NOT promoted.
 
 **Exit criteria:**
@@ -566,12 +703,13 @@ The following are deliberately excluded and must not appear in Phase-3A PRs:
 5. **Registry backfill migration** for existing targets. Phase-3A registries are empty for legacy targets and the report renders the registry-absent stub.
 6. **Threshold tuning against real target history.** Phase-3A reports the numbers; tuning is data-driven in a later phase.
 7. **Changes to `case.py`, `case.generated.py`, or promotion mechanics.** Zero touching.
-8. **WP-C Cardinality Authority integration.** Expected-subject counts come from the catalog only in Phase-3A. Consuming WP-C output is a Phase-3B step.
-9. **Tri-state IPCAT retirement.** Tri-state stays authoritative.
-10. **Confidence Ledger merger.** The Ledger remains its own section. Fact Coverage's confidence score is independent; a future phase can consider unifying them.
-11. **Auto-invalidation on upstream events.** IPCAT release-tag bumps, kernel commits, schematic revision changes — all deferred. Phase-3A uses static TTL only.
-12. **Multi-target aggregation reports.** One target per registry; no cross-target rollups.
-13. **UI, dashboards, or web rendering.** Markdown in `onboarding_report.md` only.
+8. **WP-C Cardinality Authority integration as a denominator source.** In Phase-3A the coverage denominator comes from the per-target **Expected-Subject Manifest** (ESM, §4.5), which is authored/maintained by hand for Phase-3A targets. Deriving the ESM (or the denominator directly) from WP-C cardinality output is a Phase-3B step.
+9. **ESM builder / auto-generation.** Phase-3A **reads** `targets/<target>/expected_subjects.json`; it does **not** generate, infer, or refresh it. Automatic ESM construction (from IPCAT, kernel DTS, or WP-C) is out-of-scope and deferred. Phase-3A ESMs are hand-authored and reviewed.
+10. **Tri-state IPCAT retirement.** Tri-state stays authoritative.
+11. **Confidence Ledger merger.** The Ledger remains its own section. Fact Coverage's confidence score is independent; a future phase can consider unifying them.
+12. **Auto-invalidation on upstream events.** IPCAT release-tag bumps, kernel commits, schematic revision changes — all deferred. Phase-3A uses static TTL only.
+13. **Multi-target aggregation reports.** One target per registry; no cross-target rollups.
+14. **UI, dashboards, or web rendering.** Markdown in `onboarding_report.md` only.
 
 ---
 
@@ -586,11 +724,12 @@ Rationale:
 - Two-week evidence gathering after landing gives real data for the Phase-3B threshold and enforcement decisions — no premature commitment.
 - All evidence-first principles preserved:
   - **No fact manufacturing.** MANUAL requires a review record; INFERRED is labeled; conflicts are surfaced.
-  - **No silent downgrade.** INFERRED-only cannot make a critical family PASS; conflicts cap verdicts at WARN.
-  - **No cached-is-complete assumption.** Coverage measures against the required subject list, not cache size.
-  - **No live-is-automatic assumption.** LIVE facts still show `confidence` and `authority_class`; a low-confidence live fact still shows up as WARN.
+  - **No silent downgrade.** INFERRED-only cannot make a critical family OBSERVED_COMPLETE; conflicts cap verdicts at OBSERVED_PARTIAL.
+  - **No vacuous completeness.** The coverage denominator is the per-target ESM's required set, not a matched-fact count, so `100%` is reachable only when every declared-required subject has a fact (T-F-DENOM / T-F-VACUOUS). Surplus facts never inflate coverage.
+  - **No cached-is-complete assumption.** Coverage measures against the ESM required-subject list, not cache size.
+  - **No live-is-automatic assumption.** LIVE facts still show `confidence` and `authority_class`; a low-confidence live fact still shows up as OBSERVED_PARTIAL.
   - **No manual-as-truth assumption.** Manual facts without valid review are rejected at load.
-  - **Blocked-truthful acceptable.** Registry with real gaps produces a blocked-looking Coverage section, which is the correct signal.
+  - **Blocked-truthful acceptable.** A registry with real gaps, a missing ESM, or an unpopulated banner produces an OBSERVED_GAP/OBSERVED_BLOCKED Coverage section — the correct signal, never a false green.
 
 **Do not proceed** past WP-G until two independent onboarding runs on Nord and one on Eliza have populated real Coverage sections and been reviewed. That evidence is required before we design WP-H+.
 
@@ -602,3 +741,7 @@ Rationale:
 5. IPCAT tri-state on Nord unchanged from pre-Phase-3A baseline.
 6. Grep for `NEEDS_REVIEW`, `NO_IPCAT_EVIDENCE`, `no_source_facts_available`, `Overall verdict` finds the same lines as pre-Phase-3A.
 7. Registry files under `audio_bu_skill/state/fact_registry/` are gitignored.
+8. **Denominator-provenance sign-off (blocking, `WP_F_DESIGN_REVISION.md` §7).** A reviewer confirms on paper that the coverage denominator for at least one regex family (GPIO) on Nord is ESM-sourced and target-specific — **not** matched-fact count. If the answer is matched-fact count, WP-F must not merge.
+9. **Registry-provenance banner renders** on every non-absent Fact Coverage section (EMPTY / HAND_SEEDED / IPCAT_POPULATED), verified by T-G-BANNER.
+10. **Observation vocabulary only** — no PASS/WARN/FAIL/BLOCKED enforcement words appear in the rendered `## Fact Coverage` section (T-G-VOCAB).
+11. **Nord trap-case review (blocking).** On Nord, `Audio.POWER` (open VDD_LCX/VDD_LMX FIXMEs) and `Audio.AUDIOREACH_PORT` (open I2S8 logical-port FIXME) must **not** read as OBSERVED_COMPLETE; a reviewer confirms the ESM declares those subjects required and the report shows the gap.
