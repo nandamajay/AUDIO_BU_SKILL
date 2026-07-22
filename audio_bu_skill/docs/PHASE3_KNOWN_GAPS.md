@@ -207,9 +207,12 @@ the degradation loudly.
 
 ### Status
 
-**Accepted for closure IN Phase-3A (not deferred).** This gap guards the
-integrity of the north-star scorecard and must land before WP-SRC's
-north-star checks are trusted. Tracked as WP-MCP-BANNER.
+**CLOSED 2026-07-22 by WP-MCP-BANNER** (commits b70e14f, fa72b91, 4923e40,
+1c9ebab, 958ec02). Terminal + report signals now both label MCP degradation
+honestly. Regression suite 60/60 green. Smoke validated on Nord: run-27 (ok
+path) preserves success line; run-28 (SSL_CERT_FILE=/tmp/does-not-exist forced
+degraded path) emits `[DEGRADED]` advisory in stdout and DEGRADED banner in
+report.
 
 ### Exit Criteria (for closing this gap)
 
