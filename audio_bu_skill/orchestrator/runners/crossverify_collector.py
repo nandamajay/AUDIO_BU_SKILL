@@ -10,6 +10,10 @@ Contract of one snapshot (returned by :func:`collect_snapshot`)::
 
     {
       "chip": <chip alias>,
+      "mcp_state": "ok" | "degraded",   # WP-MCP-BANNER: aggregate authority
+                                        # health, decided at snapshot-time.
+                                        # "empty" is set by the caller when
+                                        # collect_snapshot was never invoked.
       "provenance": {
         "tls": {"verify": True, "ssl_cert_file": <path>},
         "readonly_tools": [...sorted allow-list...],
@@ -21,6 +25,7 @@ Contract of one snapshot (returned by :func:`collect_snapshot`)::
           "payload": <JSON-ish structure> | None,
           "result_digest": <sha256 hex> | None,
           "error_class": <redacted category, only when unavailable>,
+          "reason": <human-readable string, only when unavailable>,
           ...
         },
         ...
@@ -161,27 +166,68 @@ def _tool_result_ok(payload: Any) -> dict[str, Any]:
     }
 
 
-def _tool_result_unavailable(error_class: str) -> dict[str, Any]:
-    return {
+def _tool_result_unavailable(
+    error_class: str, reason: str = ""
+) -> dict[str, Any]:
+    """Return an ``unavailable`` per-tool result.
+
+    ``error_class`` is the redacted, machine-readable exception category
+    (mirrors :func:`_classify_error`). ``reason`` is a human-readable
+    string added for WP-MCP-BANNER (G-3A.6) so operators see *why* the tool
+    was unavailable, not just *which* exception class. It must never carry
+    header/token echoes; :func:`_call` builds it defensively from
+    ``str(exc)`` truncated to a fixed length.
+    """
+    entry: dict[str, Any] = {
         "status": "unavailable",
         "payload": None,
         "result_digest": None,
         "error_class": error_class,
+        "reason": reason or error_class,
     }
+    return entry
+
+
+#: Cap on the ``reason`` string surfaced by :func:`_call`. Prevents an
+#: adversarial or verbose exception message from bloating the snapshot or
+#: leaking header echoes. The exception class name is always available
+#: separately via ``error_class``.
+_REASON_MAX_LEN: int = 240
+
+
+def _redact_reason(exc: BaseException) -> str:
+    """Build a bounded, human-readable ``reason`` for :func:`_tool_result_unavailable`.
+
+    Formats as ``"<ExceptionClass>: <message>"`` and truncates to
+    ``_REASON_MAX_LEN``. The exception message may itself echo a header
+    (see :func:`_classify_error` comment), so this is treated as
+    debug-visible-only; the machine sentinel remains ``error_class``.
+    """
+    cls = type(exc).__name__
+    msg = str(exc).strip().replace("\n", " ").replace("\r", " ")
+    if not msg:
+        return cls
+    combined = f"{cls}: {msg}"
+    if len(combined) > _REASON_MAX_LEN:
+        combined = combined[: _REASON_MAX_LEN - 1] + "…"
+    return combined
 
 
 def _call(transport: Any, name: str, params: dict[str, Any]) -> dict[str, Any]:
     """Invoke one allow-listed tool.
 
     Any exception raised by ``transport.call_tool`` becomes an
-    ``unavailable`` entry with a redacted ``error_class`` — the caller must
+    ``unavailable`` entry with a redacted ``error_class`` **and** a bounded
+    human-readable ``reason`` (WP-MCP-BANNER / G-3A.6) — the caller must
     not fail the whole snapshot when one tool did not answer.
     """
     _require_readonly(name)
     try:
         payload = transport.call_tool(name, params)
     except BaseException as exc:  # noqa: BLE001 — controlled: return, do not raise
-        return _tool_result_unavailable(_classify_error(exc))
+        return _tool_result_unavailable(
+            _classify_error(exc), reason=_redact_reason(exc)
+        )
     return _tool_result_ok(payload)
 
 
@@ -292,6 +338,7 @@ def collect_snapshot(chip: str, *, transport: Any = None) -> dict[str, Any]:
             "payload": swi_by_term,  # keep per-term error_class breakdown for debug
             "result_digest": None,
             "error_class": "all_swi_queries_failed",
+            "reason": "all_swi_queries_failed: every configured term returned unavailable",
             "queries": list(SWI_QUERY_TERMS),
         }
 
@@ -330,6 +377,16 @@ def collect_snapshot(chip: str, *, transport: Any = None) -> dict[str, Any]:
 
     snapshot: dict[str, Any] = {
         "chip": chip,
+        # WP-MCP-BANNER (G-3A.6): decide aggregate authority health at the
+        # snapshot site, not in main.py. "empty" is the caller's concern —
+        # if collect_snapshot never ran, provenance stays without mcp_state
+        # and the banner renderer defaults to EMPTY. Here we choose between
+        # "ok" (every tool answered) and "degraded" (≥1 tool unavailable).
+        "mcp_state": (
+            "degraded"
+            if any(t.get("status") == "unavailable" for t in tools.values())
+            else "ok"
+        ),
         "provenance": {
             "tls": {"verify": True, "ssl_cert_file": SYSTEM_CA_STORE},
             "readonly_tools": sorted(READONLY_MCP_TOOLS),
