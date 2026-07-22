@@ -1353,6 +1353,60 @@ def _render_crossverify_section(gc: dict) -> list[str]:
     return lines
 
 
+def _render_mcp_banner_section(gc: dict) -> list[str]:
+    """WP-MCP-BANNER (G-3A.6): visible authority-health banner.
+
+    Reads ``gc["cross_verification"]["snapshot_provenance"]["mcp_state"]``
+    (stitched in by WP-MCP-BANNER commit 2/4) and emits a section titled
+    ``## MCP / Authority Status`` labeled OK, DEGRADED, or EMPTY. The
+    section is always emitted when ``snapshot_provenance`` is present;
+    the label is what varies. If cross-verification never ran (no
+    ``cross_verification`` key), no banner is emitted — the report has
+    no authority context to comment on.
+
+    Pure — null-guarded, list-of-strings return, no I/O, deterministic
+    for a fixed input.
+    """
+    if not gc:
+        return []
+    cv = gc.get("cross_verification")
+    if not isinstance(cv, dict):
+        return []
+    provenance = cv.get("snapshot_provenance")
+    if not isinstance(provenance, dict):
+        return []
+    state = provenance.get("mcp_state")
+    if state not in ("ok", "degraded", "empty"):
+        # Defensive: any unexpected/missing value maps to EMPTY per Q-A
+        # (mcp_state ∈ {"ok","degraded","empty"}). Never crash the report.
+        state = "empty"
+    label = state.upper()
+    detail = {
+        "ok": (
+            "All ten read-only IPCAT tools answered at snapshot time. "
+            "Authority-side evidence is complete for this run."
+        ),
+        "degraded": (
+            "One or more IPCAT tools returned `unavailable` at snapshot "
+            "time. Authority-side evidence is partial; downstream "
+            "cross-verification verdicts may be sparse. See the "
+            "`error_class` / `reason` fields in each affected tool entry."
+        ),
+        "empty": (
+            "Cross-verification collector never ran (or was silently "
+            "swallowed). No IPCAT authority evidence is available for "
+            "this run — treat downstream verdicts accordingly."
+        ),
+    }[state]
+    return [
+        "",
+        "## MCP / Authority Status",
+        "",
+        f"**{label}** — {detail}",
+        "",
+    ]
+
+
 def _render_generation_section(gc: dict) -> list[str]:
     """Phase-2B WP8: Additive Generation section (per-artifact + WP7 fan-in).
 
@@ -1567,6 +1621,7 @@ def _render_onboarding_report(output: dict) -> str:
     lines += _render_ipcat_findings_section(gc)
     lines += _render_confidence_ledger(gc)
     lines += _render_cardinality_section(gc)
+    lines += _render_mcp_banner_section(gc)
     lines += _render_crossverify_section(gc)
     lines += _render_generation_section(gc)
 
