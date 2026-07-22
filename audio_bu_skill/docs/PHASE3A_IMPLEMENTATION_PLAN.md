@@ -55,12 +55,15 @@ fourth is not — which is exactly why only one artifact is produced today:
 | dt_scaffolding | `orchestrator/generation/dt_scaffolding.py:205-243` | open `T5.dts.firmware` | DTS files under `targets/<t>/dts/` |
 | audioreach_topology | *(no is_open gate)* | — | (produces unconditionally) |
 
-`is_open()` (`orchestrator/reasoning/model.py:213-237`) is **fail-closed**: a row is
+`is_open()` (`orchestrator/generation/model.py:213-237`) is **fail-closed**: a row is
 OPEN iff it exists AND `warning=False` AND `verdict ∈ {MATCH, PARTIAL_MATCH}`. A
 **missing** row is not open. And rows go missing at the *source* step, before any
 MCP authority is consulted: `_crossverify_source_facts` (main.py:1099-1113) reads
-`pinmux`/`endpoints`/DTS, and `track_t1`/`track_t4a`/`track_t5` short-circuit to
-`[]` when the source is empty (crossverify.py:416-417, 1816-1817).
+`pinmux`/`endpoints`/DTS, and `track_t1`/`track_t4a` short-circuit to
+`[]` when the source is empty (`orchestrator/reasoning/crossverify.py:416-417,
+1816-1817`). `track_t5` does **not** short-circuit — it emits a
+`NOT_CROSS_CHECKABLE` row on empty DTS; see G-3A.7 in `PHASE3_KNOWN_GAPS.md`
+for the corrected T5 mechanism.
 
 **Empirically confirmed this session (the load-bearing finding):**
 

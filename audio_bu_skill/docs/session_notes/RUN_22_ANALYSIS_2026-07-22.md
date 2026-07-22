@@ -26,14 +26,21 @@ The four generation skills:
 | dt_scaffolding | dt_scaffolding.py:205-243 | `T5.dts.firmware` | `targets/<t>/dts/` |
 | audioreach_topology | — | *(none)* | — → always produces |
 
-- `is_open()` (reasoning/model.py:213-237) is **fail-closed**: OPEN iff row
+- `is_open()` (generation/model.py:213-237) is **fail-closed**: OPEN iff row
   exists AND `warning=False` AND verdict ∈ {MATCH, PARTIAL_MATCH}. Missing row
   → not open.
 - Rows go missing at the **source** step. `_crossverify_source_facts`
   (main.py:1099-1113) reads pinmux/endpoints; `_load_dts_files`
-  (main.py:1118-1137) reads the DTS dir; `track_t1`/`track_t4a`/`track_t5`
-  return `[]` on empty source (crossverify.py:416-417, 1816-1817) **before**
-  MCP is consulted.
+  (main.py:1118-1137) reads the DTS dir. `track_t1`/`track_t4a`
+  return `[]` on empty source (reasoning/crossverify.py:416-417, 1816-1817)
+  **before** MCP is consulted, so **zero** T1/T4a rows exist → gate closed on
+  a missing row. `track_t5` is different: on empty DTS it does **not**
+  short-circuit — it emits **one** `NOT_CROSS_CHECKABLE` row
+  (`revision_not_pinned`, reasoning/crossverify.py:1402,1472). The row exists
+  but its verdict ∉ {MATCH, PARTIAL_MATCH}, so the dt_scaffolding gate is still
+  closed. Same observable (gate closed), different mechanism (missing row vs
+  present-but-NCC row) — this matters when diagnosing *why* a specific
+  generator is skipped (`authority_not_in_snapshot` vs a closed-verdict reason).
 
 **Empirical confirmation (this session):**
 - Nord `profile.json`: `audio_topology.pinmux=None`, `.endpoints=None`, no

@@ -114,9 +114,11 @@ the registry.
 #### Update — 2026-07-22
 
 Sibling gap G-3A.7 identified today via nord-iq10-onboarding-{21,22}
-diagnosis: T1/T4a/T5 cross-verify tracks short-circuit on empty
-source facts (crossverify.py:416, 1816) BEFORE the authority side
-(IPCAT/MCP) is consulted. This means the original framing above,
+diagnosis: T1/T4a cross-verify tracks short-circuit on empty
+source facts (`orchestrator/reasoning/crossverify.py:416, 1816`) BEFORE the
+authority side (IPCAT/MCP) is consulted; T5 does not short-circuit but
+still fails its gate (see G-3A.7 for the corrected T5 mechanism). This
+means the original framing above,
 which treated G-3A.1's live-IPCAT gap as the sole reason generation
 is degraded, was too narrow. Live IPCAT unlocks the authority side
 of cross-verify but does NOT unlock generation on its own —
@@ -244,13 +246,41 @@ empty**:
 | `codec_stub.py:214-222` | `T4a.qup.*` | `gc["audio_topology"]["endpoints"]` |
 | `dt_scaffolding.py:205-243` | `T5.dts.firmware` | DTS under `targets/<t>/dts/` |
 
-`is_open()` (`orchestrator/reasoning/model.py:213-237`) is fail-closed: a
-missing row is not open. Rows go missing at the *source* step —
-`_crossverify_source_facts` (`main.py:1099-1113`) reads `pinmux`/`endpoints`,
-`_load_dts_files` (`main.py:1118-1137`) reads the DTS dir, and
-`track_t1`/`track_t4a`/`track_t5` short-circuit to `[]`
-(`crossverify.py:416-417, 1816-1817`) when the source is empty — *before* any
-MCP authority is consulted.
+`is_open()` (`orchestrator/generation/model.py:213-237`) is fail-closed: a
+missing row is not open, and a present row whose verdict ∉ {MATCH,
+PARTIAL_MATCH} (or that carries `warning=True`) is not open either. Rows fail
+to open at the *source* step — `_crossverify_source_facts`
+(`main.py:1099-1113`) reads `pinmux`/`endpoints`, `_load_dts_files`
+(`main.py:1118-1137`) reads the DTS dir — but the **mechanism differs by
+track**, and the difference matters for diagnosing which generator is blocked
+and why:
+
+- **T1 and T4a — short-circuit to zero rows.** On empty `pinmux`/`endpoints`,
+  `track_t1` and `track_t4a` `return []`
+  (`orchestrator/reasoning/crossverify.py:416-417, 1816-1817`) *before* any MCP
+  authority is consulted. No `T1.*`/`T4a.*` row is ever created, so the
+  machine_driver and codec_stub gates close on a **missing** row.
+- **T5 — does NOT short-circuit; emits one present-but-NCC row.** On empty
+  DTS, `track_t5` falls through to its Path-1/Path-2 revision-anchor sweep and
+  emits **one** `NOT_CROSS_CHECKABLE` row (`subject=dts.revision`,
+  `coverage_gap_reason=revision_not_pinned`,
+  `orchestrator/reasoning/crossverify.py:1402,1472`). Critically, `track_t5`
+  emits *only* `DISAGREE_WITH_AUTHORITY` and `NOT_CROSS_CHECKABLE` verdicts —
+  it **never** emits `MATCH`/`PARTIAL_MATCH`, and it never emits a subject
+  named `dts.firmware` or `dts.compatible` (those come only from donor-rule
+  `kind` values `firmware`/`compatible`, which fire only when the DTS text
+  matches a donor pattern). So the dt_scaffolding gate
+  (`is_open("T5","dts.firmware")`) closes on a **row that does exist for a
+  different subject, or a present-but-non-open verdict** — not on a missing
+  `T5.*` row.
+
+The observable outcome is identical for all three (verdict ∉ open-set → gate
+closed → generator skipped), but the *reason string* the generator reports
+differs: dt_scaffolding sees `firmware_row is None` →
+`authority_not_in_snapshot` (`dt_scaffolding.py:219`), whereas machine_driver
+sees no `T1.gpio.i2s.*` rows at all. Conflating "short-circuit to `[]`" across
+all three tracks (as the original G-3A.7 text did) mis-describes the T5 path
+and would send a debugger looking for a missing row that is in fact present.
 
 **Confirmed empirically (2026-07-22):** both Nord (`nord-iq10`) and Eliza
 (`eliza`) `profile.json` have `audio_topology.pinmux=None`,
@@ -306,6 +336,11 @@ north-star unlocker.
 - G-3A.1 Status block (G-3A.7 narrows G-3A.1's scope; G-3A.1's live-IPCAT
   gap unlocks the authority side of cross-verify, while G-3A.7 addresses the
   source side).
-- Gate code: `machine_driver.py:217`, `codec_stub.py:214`,
-  `dt_scaffolding.py:205`, `reasoning/model.py:213-237`.
-- Source plumbing: `main.py:1099-1137`, `crossverify.py:416-417,1816-1817`.
+- Gate code: `orchestrator/generation/machine_driver.py:217`,
+  `orchestrator/generation/codec_stub.py:214`,
+  `orchestrator/generation/dt_scaffolding.py:205`,
+  `orchestrator/generation/model.py:213-237`.
+- Source plumbing: `main.py:1099-1137`,
+  `orchestrator/reasoning/crossverify.py:416-417,1816-1817` (T1/T4a
+  short-circuit), `orchestrator/reasoning/crossverify.py:1402,1472` (T5
+  NCC revision-anchor row).
