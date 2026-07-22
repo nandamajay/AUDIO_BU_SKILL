@@ -344,3 +344,102 @@ north-star unlocker.
   `orchestrator/reasoning/crossverify.py:416-417,1816-1817` (T1/T4a
   short-circuit), `orchestrator/reasoning/crossverify.py:1402,1472` (T5
   NCC revision-anchor row).
+
+---
+
+## G-3A.8 — codec_driver_porting emits empty evidence_refs on --generate
+
+### Title
+
+`codec_driver_porting_runner` returns `evidence_refs: []` when input verdicts
+are absent, triggering `EVIDENCE_REFERENCE_MISSING` and killing the run
+
+### Problem
+
+`PYTHONPATH=audio_bu_skill python -m orchestrator.main --target nord-iq10
+--generate --kernel-source ./linux-nord/` on run `nord-iq10-onboarding-23`
+crashed at `VALIDATING → FAILED` with `EVIDENCE_REFERENCE_MISSING`. The failure
+event is preserved verbatim at
+`audio_bu_skill/state/nord-iq10-onboarding-23.json:55-70`.
+
+The chain is a driver-layer policy gate closing on an empty evidence list
+supplied by a runner that has nothing to cite:
+
+- `audio_bu_skill/skills/codec_driver_porting/skill.yaml:27` declares
+  `evidence_required: true`.
+- `audio_bu_skill/orchestrator/driver.py:181-186` reads
+  `output["evidence"]["evidence_refs"]`; when the list is empty and the skill
+  declares `evidence_required`, it raises
+  `OrchestratorError(code="EVIDENCE_REFERENCE_MISSING", …)` and transitions the
+  skill from `VALIDATING → FAILED`.
+- `audio_bu_skill/orchestrator/runners/codec_driver_porting_runner.py:27-36`
+  only appends to `evidence_refs` when `verdicts.get(part_number)` returns a
+  truthy verdict with a non-`None` `driver_path`; if the caller passes
+  `verdicts={}` (the current `--generate` path), every codec falls into the
+  `"unresolved"` bucket at line 27 and `evidence_refs` stays `[]`.
+
+The runner cannot cite what it never resolved. The driver policy is
+correct in principle — a "success" without evidence is exactly the
+silent-degradation shape WP-MCP-BANNER exists to prevent — but on
+`--generate` the runner is being handed an empty verdict dict and
+returning "success" with `[]`, which is neither a real success nor a
+useful failure.
+
+### Impacts
+
+- `--generate` is unrunnable end-to-end on Nord until the runner
+  either produces real evidence or fails cleanly earlier.
+- The failure message (`skill output missing evidence_refs`) points at
+  the policy layer, not the empty-verdicts input — a debugger reaches
+  `driver.py:185` before understanding the real cause at
+  `codec_driver_porting_runner.py:27`.
+
+### Resolution Strategy
+
+Two candidate fixes; both out-of-scope for WP-MCP-BANNER (which is
+constrained to four cited surfaces: collector `_call`, snapshot_provenance
+merge, banner renderer, terminal summary emitter):
+
+1. **Runner-side upstream:** make `codec_driver_porting_runner` fail
+   fast when `verdicts` is empty, with an explicit
+   `NO_CODEC_VERDICTS_TO_PORT` code — replaces the misleading
+   `EVIDENCE_REFERENCE_MISSING` with a diagnostic that names the real
+   input gap.
+2. **Runner-side downstream:** trace `--generate` upstream and populate
+   `verdicts` before invocation (may be a `_generate` orchestration bug
+   where `codec_driver_porting` runs before whatever produces
+   verdicts).
+
+Option (1) is the smaller change and treats the runner's contract as
+authoritative; option (2) is the correct architectural fix if a
+producer is genuinely missing from the `--generate` chain. Diagnosis
+should decide which before code lands.
+
+### Status
+
+**Deferred — logged during WP-MCP-BANNER, out of that WP's cited
+surface set (PHASE3A_IMPLEMENTATION_PLAN §4).** Not blocked by any
+other gap; can be closed in a standalone WP after WP-MCP-BANNER
+commits 3–4 land.
+
+### Exit Criteria (for closing this gap)
+
+- `--generate` on Nord either produces `evidence_refs` from real
+  codec drivers ported, or fails at
+  `codec_driver_porting_runner` with a codec-specific diagnostic
+  (`NO_CODEC_VERDICTS_TO_PORT` or equivalent) — never the misleading
+  `EVIDENCE_REFERENCE_MISSING` from the driver policy gate.
+- Test asserting the runner refuses empty-verdicts input (fails
+  fast with the codec-specific code) before ever handing the
+  output to the driver validator.
+
+### Cross-references
+
+- `audio_bu_skill/orchestrator/driver.py:181-186` (policy gate that
+  raises `EVIDENCE_REFERENCE_MISSING`).
+- `audio_bu_skill/orchestrator/runners/codec_driver_porting_runner.py:27-36`
+  (empty `evidence_refs` root).
+- `audio_bu_skill/skills/codec_driver_porting/skill.yaml:27`
+  (`evidence_required: true` declaration).
+- `audio_bu_skill/state/nord-iq10-onboarding-23.json:55-70`
+  (recorded failure event).
