@@ -1170,9 +1170,20 @@ def _run_crossverify(target: str, target_dir: Path, output: dict) -> None:
     all_rows += list(crossverify.track_t4b(snapshot=snapshot, source=facts["t4b"]) or [])
     all_rows += list(crossverify.track_t5(snapshot=snapshot, dts=dts) or [])
 
+    # WP-MCP-BANNER (G-3A.6): propagate the collector's snapshot-time
+    # aggregate authority state into snapshot_provenance so the banner
+    # renderer (_render_onboarding_report) and terminal summary emitter
+    # (_render_terminal_summary) can read a single canonical field.
+    # The collector decides mcp_state ∈ {"ok","degraded"} at snapshot time;
+    # "empty" is written by the caller (see main.py silent-swallow site
+    # at :538-541 in a later commit) when collect_snapshot never ran.
     gc["cross_verification"] = {
         "rows": [row.to_dict() for row in all_rows],
-        "snapshot_provenance": {**(snapshot.get("provenance") or {}), "chip": chip},
+        "snapshot_provenance": {
+            **(snapshot.get("provenance") or {}),
+            "chip": chip,
+            "mcp_state": snapshot.get("mcp_state", "ok"),
+        },
     }
     print(f"  [crossverify] chip={chip}  rows={len(all_rows)}")
 
