@@ -553,7 +553,7 @@ otherwise.
 
 ---
 
-### WP-MCP-BANNER — MCP Degradation Banner (closes G-3A.6)
+### WP-MCP-BANNER — MCP Degradation Banner (closes G-3A.6) ✅ CLOSED 2026-07-22
 
 **NORTH-STAR JUSTIFICATION:** Guards the goal. Today `_run_crossverify` is wrapped in
 a silent try/except (main.py:538-541), the collector `_call` swallows BaseException →
@@ -567,7 +567,11 @@ false north-star claim. This WP makes degradation loud.
 snapshot, and make the terminal summary reflect degraded state instead of the
 unconditional success line.
 
-**STATUS: NOT STARTED.**
+**STATUS: CLOSED 2026-07-22** by 5-commit series (b70e14f, fa72b91, 4923e40,
+1c9ebab, 958ec02). Terminal + report signals now both label MCP degradation
+honestly. Regression suite 60/60 green. Smoke validated on Nord: run-27 (ok path)
+preserves success line; run-28 (SSL_CERT_FILE=/tmp/does-not-exist forced degraded
+path) emits `[DEGRADED]` advisory in stdout and DEGRADED banner in report.
 
 **FILES — MODIFIED:** `orchestrator/main.py` (the 3 cited points: 538-541 wrap,
 692 summary line, and the crossverify snapshot-provenance handoff);
@@ -578,13 +582,13 @@ instead of only swallowing it — 173-185). **CREATED:** `tests/test_mcp_banner.
 **OUTPUTS:** a banner block in `onboarding_report.md` + a truthful terminal summary.
 
 **TESTS (T-MCP-* naming):**
-- **T-MCP-1** MCP down → banner=DEGRADED, terminal summary does NOT claim clean success.
-- **T-MCP-2** MCP up → banner=OK.
-- **T-MCP-3** collector `_call` failure surfaces a named reason, not just "unavailable".
-- **T-MCP-4** degraded run still exits 0 (advisory, non-fatal) but is *labeled*.
+- **T-MCP-1** MCP down → banner=DEGRADED, terminal summary does NOT claim clean success. ✅ GREEN
+- **T-MCP-2** MCP up → banner=OK. ✅ GREEN
+- **T-MCP-3** collector `_call` failure surfaces a named reason, not just "unavailable". ✅ GREEN
+- **T-MCP-4** degraded run still exits 0 (advisory, non-fatal) but is *labeled*. ✅ GREEN
 
-**EXIT CRITERIA:** ☐ banner renders in all 3 states ☐ no silent success line when
-degraded ☐ T-MCP-1…4 green ☐ still non-fatal (exit 0).
+**EXIT CRITERIA:** ☑ banner renders in all 3 states ☑ no silent success line when
+degraded ☑ T-MCP-1…4 green ☑ still non-fatal (exit 0). **All met.**
 
 **NORTH-STAR EXIT CHECK:** Artifact count itself unchanged by this WP, BUT it
 prevents a *false* scorecard: after WP-MCP-BANNER a "3/4 skipped" run is
@@ -596,18 +600,20 @@ exit 0, banner only. R-MCP-2 banner noise on healthy runs → mitigation: OK sta
 one line.
 
 **MANUAL VERIFICATION:** run once with MCP reachable, once with it unreachable;
-confirm the report and terminal differ honestly.
+confirm the report and terminal differ honestly. **DONE:** run-27 (ok) vs run-28
+(SSL_CERT_FILE forced degraded).
 
-**ATOMIC COMMIT SEQUENCE:**
-1. `fix(crossverify): surface authority-unavailable reason instead of swallowing`
-2. `feat(report): MCP/authority status banner`
-3. `fix(onboard): terminal summary reflects degraded crossverify`
-4. `test(mcp-banner): degraded vs healthy vs empty`
+**ATOMIC COMMIT SEQUENCE (as shipped 2026-07-22 — supersedes the original 4-commit sketch):**
+1. `b70e14f` test(mcp-banner): T-MCP-1..4 red before implementation *(§5a test-first)*
+2. `fa72b91` fix(crossverify): reason field on unavailable + snapshot-time mcp_state
+3. `4923e40` fix(crossverify): propagate mcp_state into snapshot_provenance
+4. `1c9ebab` feat(wp-mcp-banner): render MCP / Authority Status section
+5. `958ec02` feat(wp-mcp-banner): terminal summary mcp_state-aware
 
-**ESTIMATED EFFORT:** **1–2 days.**
+**ESTIMATED EFFORT:** **1–2 days.** **Actual: ~1 day** (5 commits landed 2026-07-22).
 
 **PREREQUISITES:** none. Best landed *before* WP-SRC so WP-SRC's north-star checks
-are read against a truthful banner.
+are read against a truthful banner. **Satisfied.**
 
 ---
 
@@ -711,7 +717,7 @@ state, vocabulary.
 ```
 [ ] WP-D        committed 1afec36 (verify on ancestry)   — DONE
 [ ] WP-E        committed 4af8bdd (verify on ancestry)   — DONE
-[ ] WP-MCP-BANNER   (guards scorecard integrity)
+[x] WP-MCP-BANNER   CLOSED 2026-07-22 (b70e14f, fa72b91, 4923e40, 1c9ebab, 958ec02)
 [ ] WP-SRC-A    (pinmux/T1 — opens machine_driver half; no scorecard move alone)
 [ ] WP-SRC-B    (endpoints/T4a + separator reconcile — A+B flip machine_driver + codec_stub)
 [ ] WP-SRC-C    (DTS/T5 + producer/gate reconcile — flips dt_scaffolding)
@@ -728,7 +734,7 @@ four that produce a GeneratedArtifact.
 | After WP | Nord total | Eliza total | MD | CS | DT | AR | Moved by |
 |---|---|---|---|---|---|---|---|
 | baseline (HEAD d8edec2) | 1/4 | 1/4 | ✗ | ✗ | ✗ | ✓ | — |
-| WP-MCP-BANNER | 1/4 (*honestly labeled*) | 1/4 | ✗ | ✗ | ✗ | ✓ | — (integrity only) |
+| WP-MCP-BANNER (✅ CLOSED 2026-07-22, commits b70e14f/fa72b91/4923e40/1c9ebab/958ec02) | 1/4 (*honestly labeled*) | 1/4 | ✗ | ✗ | ✗ | ✓ | — (integrity only — MCP degradation now labeled honestly in both stdout and report) |
 | WP-SRC-A | **1/4 (unchanged — expected)** | 1/4 | ✗ (T1 half open) | ✗ | ✗ | ✓ | — (A alone moves nothing) |
 | WP-SRC-B | **3/4** | **3/4** | ✓ | ✓ | ✗ | ✓ | **A+B jointly** |
 | WP-SRC-C | **4/4** | **4/4** | ✓ | ✓ | ✓ | ✓ | **C** |
