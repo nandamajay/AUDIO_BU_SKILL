@@ -24,12 +24,15 @@ Refs: PHASE3A_IMPLEMENTATION_PLAN.md §4 WP-SRC-A1,
 """
 
 from .dt_reader import read_dt_pinctrl
+from .endpoints import EndpointFact, derive_endpoints_from_ipcat
 from .models import SOURCE_UNRESOLVED, sentinel_to_json_literal
 from .pinmux import PinmuxFact, derive_pinmux_from_dt
 
 __all__ = [
     "SOURCE_UNRESOLVED",
+    "EndpointFact",
     "PinmuxFact",
+    "derive_endpoints_from_ipcat",
     "derive_pinmux_from_dt",
     "read_dt_pinctrl",
     "sentinel_to_json_literal",
