@@ -503,6 +503,24 @@ and populates `analysis["dt"]` before `_build_audio_topology` runs.
 Reuse the existing DTS reader that `_crossverify_source_facts.t5`
 already walks under `targets/<t>/dts/` where possible.
 
+### Status
+
+**CLOSED 2026-07-22 by WP-SRC-A2 wiring commit cedb3f6.**
+Real Nord `--onboard` (run-31) confirms `profile.audio_topology.pinmux`
+transitions from `SOURCE_UNRESOLVED` sentinel to non-empty list of
+`PinmuxFact` dicts with `gpio.i2s.*` names. Cross-verify rows expanded
+11 → 20, confirming `T1.gpio.i2s.*` gate now has source-side facts.
+WP-SRC-A2 (kernel-DT reader + wiring) architecturally complete.
+
+Full ledger for WP-SRC-A2:
+  - `29bf385` — test(wp-src-a2): red baseline
+  - `04bb164` — feat(wp-src-a2): kernel-DT reader (A2-1/3/4 green)
+  - `cedb3f6` — feat(wp-src-a2): wire read_dt_pinctrl into
+    _build_audio_topology (A2-2 green)
+
+T1 half of G-3A.7 architecturally solved. T4a half still open —
+addressed by WP-SRC-B (T4a separator reconciliation).
+
 ### Blocks north-star flip
 
 Yes. Nord machine_driver row on the §5 scorecard stays at "gated
