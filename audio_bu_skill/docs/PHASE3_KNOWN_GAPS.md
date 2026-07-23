@@ -539,3 +539,139 @@ closed" until WP-SRC-A2 lands (independently of WP-SRC-A1 status).
 - `audio_bu_skill/docs/PHASE3A_IMPLEMENTATION_PLAN.md` §4 WP-SRC-A2
   (planned resolution).
 
+---
+
+## G-3A.11 — IPCAT QUP Enrichment Missing (ipcat.qup_controllers never populated)
+
+### Title
+
+IPCAT QUP Enrichment Missing (analysis.ipcat.qup_controllers → endpoints)
+
+### Discovered
+
+2026-07-23, during WP-SRC-B commit 3 (WIRING) pre-commit verification
+(Q2 real-Nord endpoint check under advisor review). Same disk-write /
+producer-reads-fixture-only-key-path pattern as G-3A.9.
+
+### Problem
+
+`derive_endpoints_from_ipcat` and the WP-SRC-B commit 3 wiring at
+`target_onboarding_runner._build_audio_topology` correctly consume
+`analysis["ipcat"]["qup_controllers"]` — but **nothing in the real
+runner path populates `analysis["ipcat"]["qup_controllers"]`**. The
+`ipcat.qup_controllers` list shape that the T-SRC-B fixture seeds via
+`_qup_populated_analysis()` (`tests/test_source_ingest_endpoints.py:82-120`)
+has no producer in production.
+
+Confirmed by reading the real Nord artifact
+(`targets/nord-iq10/qgenie_analysis.json`): top-level keys are
+`[amplifiers, audio_stack, board, buses, codecs, dt, element_counts,
+human_review_needed, ipcat_findings, mics, missing_evidence,
+nearest_targets, overall_confidence, power_model, schematic_nets, soc,
+soundwire, speakers]`. **There is NO `ipcat` key** — `analysis.get("ipcat")`
+is `None`, and `qup_controllers` appears nowhere. The fixture docstring
+(`test_source_ingest_endpoints.py:85-88`) claims the shape "matches what
+the WP-SRC-A2 wiring commit's `analysis` mapping already carries on real
+`--onboard` runs" — that claim is false; the producer was written to the
+fixture, and the two agree with each other while disagreeing with reality.
+
+QUP facts DO exist on real Nord, but in two other forms neither of which
+the producer reads:
+
+- `analysis["buses"]` — freeform strings, e.g.
+  `"I2C QUP2_SE4 (i2c18, gpio154/155) — codec control per applied
+  nord-iq10.dtsi pinmux"` and
+  `"LPASS I2S8 / TDM8 (audio data path, proposed per
+  candidate_patch_series:5267b2e1)"`.
+- Cached IPCAT evidence
+  `targets/nord-iq10/evidence/ipcat/chipio_get_qups.json` — a structured
+  27-element list, each entry
+  `{clk, gpios:[[{function, name:"SAILSS_QUP0_SE0_L0", number, pad, ...}]]}`.
+
+Consequence: on real Nord (and Eliza), `derive_endpoints_from_ipcat(analysis)`
+returns `SOURCE_UNRESOLVED`, `topology["endpoints"]` lands on disk as the
+literal string `"SOURCE_UNRESOLVED"` (confirmed at
+`targets/nord-iq10/case.generated.py:188`), `track_t4a` emits zero
+`T4a.qup.*` rows, and the `codec_stub` / `machine_driver` gates stay
+closed. The north-star scorecard does NOT flip after WP-SRC-B alone.
+
+### Why accepted
+
+WP-SRC-B commit 1 (producer) + commit 2 (`track_t4a` separator reconcile)
++ commit 3 (wiring) prove the endpoint ingestion contract end-to-end on
+the fixture, mirroring the WP-SRC-A1 → A2 split. The enrichment producer
+(populate `analysis["ipcat"]["qup_controllers"]` from real IPCAT/`buses`
+evidence, or repoint `derive_endpoints_from_ipcat` at
+`chipio_get_qups.json` + `buses`) is a distinct, self-contained follow-on
+with its own IPCAT-parsing surface and real-shape validation — a peer to
+WP-SRC-A2's kernel-DT reader, not a fix that belongs inside c3 wiring.
+
+### Impact
+
+- **Blocks north-star flip.** Without the enrichment producer, the
+  WP-SRC-B wiring is inert on real targets — the sentinel is what lands
+  on disk. WP-SRC-B commit 3 does NOT move Nord 1/4 → 3/4.
+- **Blocks the T-SRC-B real-target proof.** The fixture-driven
+  T-SRC-B-3 joint-flip test passes without the producer; a real-target
+  smoke check cannot.
+- **Does not affect** the WP-SRC-B shipped fixture tests: T-SRC-B-1
+  (producer non-empty on fixture), the separator reconcile, and the
+  joint-flip open assertion are green on the fixture alone.
+- Compounds with the **T-SRC-B-2 prerequisite gap**: `VerificationGate`
+  is not defined in `orchestrator/generation/model.py` (grep for
+  `class VerificationGate` across `orchestrator/` returns nothing), so
+  `test_t4a_row_subject_uses_dot_separator_and_is_open` is currently red
+  at the import step — a separate missing symbol, tracked alongside this
+  gap.
+
+### Resolution — WP-SRC-B2 candidate
+
+Scope: add an IPCAT QUP enrichment reader that either (a) parses the
+cached `chipio_get_qups.json` corpus + `analysis["buses"]` strings into
+the `qup_controllers` dict shape `derive_endpoints_from_ipcat` expects
+and populates `analysis["ipcat"]["qup_controllers"]` before
+`_build_audio_topology` runs, or (b) repoints `derive_endpoints_from_ipcat`
+directly at the real evidence shapes. Reuse the existing IPCAT evidence
+discovery that `source_intake_runner.discover_evidence` already walks
+under `targets/<t>/evidence/ipcat/` where possible. Also land the
+`VerificationGate` symbol so T-SRC-B-2 can exercise `is_open`.
+
+### Status
+
+**Accepted architectural gap. Deferred to WP-SRC-B2.** WP-SRC-B commits
+1–3 ship the fixture-proven contract; real-target endpoint population is
+the mandatory follow-on that actually flips the T4a half of the
+north-star. Per the standing scope constraint, fixture-green is NOT a
+substitute for real-target capability.
+
+### Blocks north-star flip
+
+Yes. Nord codec_stub and machine_driver rows on the §5 scorecard stay at
+"gated closed" until the enrichment producer lands (independently of
+WP-SRC-B commit-3 wiring status). This is the T4a analog of G-3A.9's T1
+finding.
+
+### Cross-references
+
+- `audio_bu_skill/orchestrator/source_ingest/endpoints.py:4,14-18`
+  (`derive_endpoints_from_ipcat`; consumer, reads
+  `analysis["ipcat"]["qup_controllers"]`, correctly wired to a shape no
+  producer emits).
+- `audio_bu_skill/orchestrator/runners/target_onboarding_runner.py:690-694`
+  (`_build_audio_topology` endpoints branch; correctly reads the producer
+  result but the producer has no real input).
+- `audio_bu_skill/tests/test_source_ingest_endpoints.py:82-120`
+  (`_qup_populated_analysis` fixture; docstring claims real-run parity
+  that the real artifact contradicts).
+- `audio_bu_skill/targets/nord-iq10/qgenie_analysis.json` (real analysis:
+  no `ipcat` key; QUP facts live in `buses` + cached
+  `evidence/ipcat/chipio_get_qups.json`).
+- `audio_bu_skill/targets/nord-iq10/case.generated.py:188`
+  (`"endpoints": "SOURCE_UNRESOLVED"` — the sentinel that lands on disk
+  today).
+- G-3A.9 (structurally identical DT-plumbing gap; G-3A.11 is the T4a
+  analog of G-3A.9's T1 half — both are producer-reads-fixture-only-key
+  gaps under G-3A.7's empty-source-side root cause).
+- G-3A.7 Status block (this gap is the T4a half of the empty-source-side
+  root cause; A2 closed the T1 half, this closes the T4a half).
+
