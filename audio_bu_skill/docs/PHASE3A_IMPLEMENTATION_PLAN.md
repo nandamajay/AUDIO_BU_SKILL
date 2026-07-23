@@ -85,7 +85,8 @@ the MCP authority.** This is the gap WP-SRC closes.
 | **WP-E** (advisory provenance registry) | **Indirect / infra** | Records *where facts came from*. Committed (`4af8bdd`), inert. Advisory-only by architecture (§3, §10) — cannot flip a gate. |
 | **WP-F** (family coverage engine) | **No (diagnostic)** | Computes OBSERVED_COMPLETE/GAP against ESM denominator. Tells you the source is empty; does not fill it. |
 | **WP-G** (coverage report render) | **No (diagnostic)** | Renders the `## Fact Coverage` section. Reporting only. |
-| **WP-SRC-A** (pinmux/T1 ingestion) | **No alone — half-open** | Populates `audio_topology.pinmux` so `track_t1` emits `T1.gpio.i2s.*` MATCH rows. Opens *one half* of the machine_driver gate (`T1.gpio.i2s.*`), but the gate also requires `T4a.qup.*` → scorecard stays 1/4. Coupled with WP-SRC-B. |
+| **WP-SRC-A1** (pinmux ingestion contract) | **No alone — inert without A2** | Provides `derive_pinmux_from_dt` + Design B `SOURCE_UNRESOLVED` sentinel + wiring in `_build_audio_topology`. On real Nord/Eliza `analysis["dt"]` is empty (G-3A.9), so this branch always emits the sentinel string until A2 lands. Coupled with WP-SRC-A2 + WP-SRC-B. |
+| **WP-SRC-A2** (DT plumbing: `--kernel-source` → `analysis["dt"]`) | **No alone — half-open with A1** | Loads the kernel DT into `analysis["dt"]` so A1's derivation actually returns a `list[PinmuxFact]` on real targets. Together A1+A2 open *one half* of the machine_driver gate (`T1.gpio.i2s.*`); the other half (`T4a.qup.*`) requires WP-SRC-B → scorecard stays 1/4 until B lands. Closes G-3A.9. |
 | **WP-SRC-B** (endpoints/T4a + separator reconcile) | **YES — jointly with A** | Populates `audio_topology.endpoints` AND reconciles the `T4a.qup:`/`T4a.qup.` producer↔gate separator (crossverify.py:1743-1754 vs machine_driver.py:229 / codec_stub.py:214). **A+B jointly flip `machine_driver` 0→1 AND `codec_stub` 0→1** (scorecard 1/4 → 3/4). |
 | **WP-SRC-C** (DTS/T5 + producer/gate reconcile) | **YES — independently** | Stages `targets/<t>/dts/` AND fixes the `track_t5` producer so it can emit MATCH/PARTIAL_MATCH for `dts.firmware` (currently emits only DISAGREE + NCC — see G-3A.7). Flips `dt_scaffolding` 0→1 (scorecard → 4/4). Requires a `WP_SRC_C_DESIGN_NOTE.md` blocking first commit — not pure ingestion. |
 | **WP-MCP-BANNER** (degradation banner) | **Guards the goal** | Makes silent MCP-down degradation loud (closes G-3A.6). Prevents a "success" that is actually a silent skip. |
@@ -93,28 +94,31 @@ the MCP authority.** This is the gap WP-SRC closes.
 **Critical honesty gate satisfied:** WP-D/E/F/G are diagnostic/advisory infrastructure
 that, by their own architecture, **cannot** unlock the three skipped generators.
 Per the standing constraint ("don't smuggle diagnostic infrastructure into Phase-3A
-as a substitute for real capability"), **WP-SRC-A + WP-SRC-B + WP-SRC-C are all
-mandatory** (A+B are a coupled pair that jointly move 2/4; C is independent and
-moves the final 1/4). Each sub-WP is designed at full depth in §4.
+as a substitute for real capability"), **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B + WP-SRC-C
+are all mandatory** (A1+A2+B are a coupled triple that jointly move 2/4 — A1 and A2
+are inert without each other, and A1+A2 are inert on the scorecard without B; C is
+independent and moves the final 1/4). Each sub-WP is designed at full depth in §4.
 
 ---
 
 ## §3 — Sequencing Decision
 
-### Option A — Ship WP-D→WP-G, defer WP-SRC-A/-B/-C
+### Option A — Ship WP-D→WP-G, defer WP-SRC-A1/-A2/-B/-C
 - Delivers the coverage/observation infrastructure.
 - **GOAL NOT MET.** Nord stays **1/4**, Eliza stays **1/4**. The skill still cannot
   generate 4 artifacts on any target, fresh or otherwise.
 - The coverage report would faithfully report OBSERVED_GAP for the empty families —
   a correct diagnosis of a capability we chose not to build.
 
-### Option B — Insert WP-SRC-A/-B/-C into Phase-3A ✅ RECOMMENDED
-- Sequence: **WP-MCP-BANNER → WP-SRC-A → WP-SRC-B → WP-SRC-C → WP-F → WP-G**
+### Option B — Insert WP-SRC-A1/-A2/-B/-C into Phase-3A ✅ RECOMMENDED
+- Sequence: **WP-MCP-BANNER → WP-SRC-A1 → WP-SRC-A2 → WP-SRC-B → WP-SRC-C → WP-F → WP-G**
   (WP-D, WP-E already committed).
-- **GOAL MET.** WP-SRC-A opens the T1 half of `machine_driver`; WP-SRC-B closes
-  the pair (A+B jointly flip `machine_driver` and `codec_stub`); WP-SRC-C flips
-  `dt_scaffolding`. Nord and Eliza move toward **4/4** (or emit explicit
-  OBSERVED_PROPOSAL per family with a cited reason — never a silent skip).
+- **GOAL MET.** WP-SRC-A1 lands the ingestion contract; WP-SRC-A2 plumbs the DT
+  so A1 actually returns facts on real targets; together A1+A2 open the T1 half
+  of `machine_driver`; WP-SRC-B closes the coupled triple (A1+A2+B jointly flip
+  `machine_driver` and `codec_stub`); WP-SRC-C flips `dt_scaffolding`. Nord and
+  Eliza move toward **4/4** (or emit explicit OBSERVED_PROPOSAL per family with
+  a cited reason — never a silent skip).
 - WP-F/WP-G then *measure and report* the newly-populated coverage, which is their
   correct role once there is something to measure.
 
@@ -122,8 +126,8 @@ moves the final 1/4). Each sub-WP is designed at full depth in §4.
 
 **Option B.** Rationale: the north star is artifact generation on fresh targets.
 WP-D/E/F/G do not move it (§2, proven by the run-21/22 diagnostic). Shipping Phase-3A
-without WP-SRC-A/-B/-C would deliver a Phase where, by the plan's own success
-criterion, the goal is definitionally unreachable. Sub-WPs A and B feed the
+without WP-SRC-A1/-A2/-B/-C would deliver a Phase where, by the plan's own success
+criterion, the goal is definitionally unreachable. Sub-WPs A1/A2 and B feed the
 *existing*, already-wired plumbing path (`_crossverify_source_facts` +
 `_load_dts_files`, main.py:1099-1137) — no new pipeline seam is required; WP-SRC-C
 additionally reconciles the T5 producer/gate mismatch documented in G-3A.7 (design
@@ -140,7 +144,7 @@ committed via `WP_SRC_C_DESIGN_NOTE.md` before code).
 > **AMENDMENT (2026-07-22, post-empirical):** The original single WP-SRC
 > block below assumed populating pinmux/endpoints/DTS unlocks all three
 > gated generators. That claim is **empirically falsified** (see §4a). WP-SRC
-> is split into three independently-reviewable sub-WPs — WP-SRC-A / -B / -C —
+> is split into four independently-reviewable sub-WPs — WP-SRC-A1 / -A2 / -B / -C —
 > each with its own design decision and STOP. WP-D, WP-E, WP-MCP-BANNER, WP-F,
 > WP-G are unchanged and retain their original blocks.
 
@@ -269,103 +273,187 @@ generator" premise):**
 
 | Sub-WP | Channel | Opens | Flips a generator *alone*? |
 |---|---|---|---|
-| WP-SRC-A | pinmux (T1) | `T1.gpio.i2s.*` half of machine_driver | **No** — machine_driver also gates on `T4a.qup.*` |
-| WP-SRC-B | endpoints (T4a) + separator reconcile | `T4a.qup.*` | **No alone; A+B jointly flip machine_driver 0→1 AND codec_stub 0→1** |
+| WP-SRC-A1 | pinmux (T1) — sentinel + wiring | `T1.gpio.i2s.*` half of machine_driver *once WP-SRC-A2 populates `analysis["dt"]`* | **No** — machine_driver also gates on `T4a.qup.*`, AND on real targets A1's wiring is inert until A2 lands |
+| WP-SRC-A2 | DT plumbing (`--kernel-source` → `analysis["dt"]`) | makes WP-SRC-A1's wiring effective on real targets | **No** — depends on WP-SRC-A1 to consume its output |
+| WP-SRC-B | endpoints (T4a) + separator reconcile | `T4a.qup.*` | **No alone; A1+A2+B jointly flip machine_driver 0→1 AND codec_stub 0→1** |
 | WP-SRC-C | DTS (T5) + producer/gate fix | `T5.dts.firmware` | **Yes** — dt_scaffolding 0→1 (but requires a producer change, not just staging) |
 
-So **WP-SRC-A and WP-SRC-B are a coupled pair** — neither moves the scorecard on
-its own; the pair moves **two** generators at once (machine_driver + codec_stub).
-WP-SRC-C independently moves the third. `audioreach_topology` is ungated and
+So **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B are a coupled triple** — none moves the
+scorecard on its own; the triple moves **two** generators at once (machine_driver
++ codec_stub). A1 alone is inert on real targets (no DT plumbing); A2 alone has
+nothing to feed; A1+A2 opens the T1 half but machine_driver still needs T4a from
+B. WP-SRC-C independently moves the third. `audioreach_topology` is ungated and
 already produces (the standing 1/4). T4b (codec advisory) and T2 (no-DISAGREE)
 gates are **already satisfiable** from `_build_audio_topology`'s `codecs` key —
 they are not blockers, so this split does not touch them.
 
 ---
 
-### WP-SRC-A — Pinmux Source Ingestion (T1)  ⭐
+### WP-SRC-A1 — Pinmux Source Ingestion (T1, sentinel + wiring only)  ⭐
 
 **NORTH-STAR JUSTIFICATION:** Opens the `T1.gpio.i2s.*` half of the machine_driver
-gate. **Does not flip a generator alone** (machine_driver also needs `T4a.qup.*`
-from WP-SRC-B); its scorecard contribution is realized jointly with WP-SRC-B. It
-is sequenced first because pinmux derivation is the lower-risk half and its schema
-constraint (the required `name`) is already pinned by test.
+gate **once DT plumbing lands** (G-3A.9 / WP-SRC-A2 — see below). **Does not flip
+a generator alone,** for two independent reasons: (i) machine_driver also needs
+`T4a.qup.*` from WP-SRC-B, and (ii) nothing currently populates `analysis["dt"]`
+in the real runner path, so the WP-SRC-A1 wiring is inert on real targets until
+WP-SRC-A2 lands. Its scorecard contribution is realized jointly with WP-SRC-B
+**and** WP-SRC-A2. It is sequenced first because pinmux derivation is the lower-
+risk half and its schema constraint (the required `name`) is already pinned by
+test.
 
-**OBJECTIVE:** Populate `profile["audio_topology"]["pinmux"]` with entries that
-carry a `name` in the `gpio.i2s.*` namespace (per §4a-1), so `track_t1` emits rows
-that key under `T1.gpio.i2s.` and `is_open()` returns True.
+**OBJECTIVE:** Ship the derivation function (`derive_pinmux_from_dt`), the
+`SOURCE_UNRESOLVED` sentinel (Design B — bare-singleton, identity-checked), the
+JSON-boundary helper (`sentinel_to_json_literal`), and the wiring in
+`target_onboarding_runner._build_audio_topology` that routes derived facts (or the
+sentinel) into `profile["audio_topology"]["pinmux"]`. On the WP-SRC-A2 fixture DT
+this fills `pinmux` with entries carrying a `gpio.i2s.*` name (per §4a-1) so that
+`track_t1` emits rows keyed under `T1.gpio.i2s.` once WP-SRC-A2 populates the DT
+on real targets.
 
-**STATUS: NOT STARTED.** Nord/Eliza `pinmux=None` confirmed this session.
+**STATUS: IN PROGRESS.** Commit 1 landed (ebe3757). Commits C (models Design B),
+D (wiring Design B + JSON boundary), and E (docs) are ready to ship.
 
 **FILES — CREATED:**
 - `orchestrator/source_ingest/__init__.py`
-- `orchestrator/source_ingest/models.py` — `PinmuxFact` dataclass (to_dict,
-  deterministic; mirrors codegen/models.py style). MUST carry a `name` field.
-- `orchestrator/source_ingest/pinmux.py` — derive T1 pinmux facts from resolved DT
-  / IPCAT GPIO map into the schema `track_t1` parses, with the `gpio.i2s.*` name.
-- tests extend `tests/test_g3a7_source_gate.py` (the committed source→gate probe):
-  `test_source_ingest_pinmux.py` for the derivation unit tests.
+- `orchestrator/source_ingest/models.py` — `SOURCE_UNRESOLVED` singleton (Design B,
+  bare object) + `sentinel_to_json_literal` JSON-boundary helper.
+- `orchestrator/source_ingest/pinmux.py` — `derive_pinmux_from_dt` + `PinmuxFact`.
+- `tests/test_source_ingest_pinmux.py` — T-SRC-A-1..5.
 
 **FILES — MODIFIED:**
-- `orchestrator/main.py` — single insertion before `_run_crossverify` (prior to
-  main.py:1140) that populates `gc["audio_topology"]["pinmux"]`; SOURCE_UNRESOLVED
-  marker on underivable, never silent empty.
-- `targets/nord-iq10/profile.json`, `targets/eliza/profile.json` — pinmux populated
-  (or marked).
+- `orchestrator/runners/target_onboarding_runner.py` — `_build_audio_topology`
+  reads `analysis.get("dt")`, calls `derive_pinmux_from_dt`, writes either a real
+  list of pinmux dicts OR the literal string `"SOURCE_UNRESOLVED"` (via
+  `sentinel_to_json_literal` at the JSON boundary) into `topology["pinmux"]`.
+- `orchestrator/main.py` — **NO EDIT** (Design B removes the need; the string form
+  of the sentinel is truthy-but-not-list and the existing `t1 = topology.get(...)
+  or audio_pins` short-circuit falls through naturally to the `audio_pins`
+  fallback).
 
-**FILES — NOT TOUCHED:** machine_driver.py gate logic; codegen engine seam.
+**FILES — NOT TOUCHED:** machine_driver.py gate logic; codegen engine seam;
+kernel-DT reader (G-3A.9 / WP-SRC-A2 scope).
 
 **TESTS (T-SRC-A-*):**
 - **T-SRC-A-1** pinmux ingestion from a DT with the I2S8 pin group → non-empty
   pinmux whose entries carry a `gpio.i2s.*` name.
 - **T-SRC-A-2** integration: after ingestion, `track_t1` returns ≥1 row keyed under
-  `T1.gpio.i2s.` and `facts.is_open("T1", subject)==True` (reuses
-  `_open_rows_for_prefix` from the committed probe).
-- **T-SRC-A-3** underivable pinmux → `SOURCE_UNRESOLVED` marker, not silent empty.
+  `T1.gpio.i2s.` and `facts.is_open("T1", subject)==True` (fixture-driven).
+- **T-SRC-A-3** underivable pinmux → `SOURCE_UNRESOLVED` identity check
+  (`result is SOURCE_UNRESOLVED`), not silent empty.
 - **T-SRC-A-4** determinism on the degradation fixture: two runs → byte-identical
   pinmux.
+- **T-SRC-A-5** integration: end-to-end runner path seeds fixture `analysis["dt"]`,
+  proves the wiring calls `derive_pinmux_from_dt`, and the list branch reaches
+  `topology["pinmux"]` as pinmux dicts.
 
 **EXIT CRITERIA (boolean):**
-- ☐ `pinmux` non-empty (or SOURCE_UNRESOLVED-marked) for Nord and Eliza
-- ☐ T-SRC-A-1…4 green
-- ☐ `track_t1` opens `T1.gpio.i2s.*` on the Nord profile (integration proof)
+- ☐ `pinmux` non-empty on the fixture DT; `"SOURCE_UNRESOLVED"` string on real Nord
+  (until WP-SRC-A2 lands, this is the expected shape on real targets)
+- ☐ T-SRC-A-1…5 green
+- ☐ `track_t1` opens `T1.gpio.i2s.*` on the fixture profile (integration proof)
 - ☐ Full suite still green; no generator gate code modified
 
-**NORTH-STAR EXIT CHECK:** After WP-SRC-A alone, the scorecard **stays 1/4** —
-this is expected and correct (machine_driver still lacks `T4a.qup.*`). The
-measurable proof for A is the **is_open("T1", …)==True** integration assertion,
-not a scorecard delta. **Do not treat 1/4-after-A as a STOP trigger** (see §5a
-rule 2 guard-clause).
+**NORTH-STAR EXIT CHECK:** After WP-SRC-A1 alone, the scorecard **stays 1/4** —
+this is expected and correct: (a) machine_driver still lacks `T4a.qup.*`; (b) DT
+plumbing (G-3A.9 / WP-SRC-A2) is missing, so `topology["pinmux"]` on real Nord
+lands as the literal string `"SOURCE_UNRESOLVED"`, not a list. The measurable
+proof for A1 is that T-SRC-A-1..5 pass and the JSON boundary is honest, not a
+scorecard delta. **Do not treat 1/4-after-A1 as a STOP trigger** (see §5a rule 2
+guard-clause).
 
 **RISKS:**
 - **R-SRC-A-1** the derived pinmux omits the `name` (§4a-1) → row emitted but gate
   closed. *Mitigation:* T-SRC-A-2 asserts gate-open, not just non-empty dict.
 - **R-SRC-A-2** fabricating a plausible-but-wrong pin group. *Mitigation:*
-  SOURCE_UNRESOLVED + manual DT cross-check (below); never invent.
+  `SOURCE_UNRESOLVED` + manual DT cross-check (below); never invent.
 
-**MANUAL VERIFICATION CHECKPOINT:** eyeball Nord pinmux against the applied I2S8
-pinctrl in the DT — pin numbers/functions/name must match.
+**MANUAL VERIFICATION CHECKPOINT:** on the fixture DT, eyeball derived pinmux
+against the seeded I2S8 pinctrl group — pin numbers/functions/name must match.
+Real-target manual DT cross-check is deferred to WP-SRC-A2.
 
 **ATOMIC COMMIT SEQUENCE:**
-1. `feat(source-ingest): pinmux fact model`
-2. `feat(source-ingest): derive T1 pinmux (gpio.i2s.* named) from resolved DT`
-3. `feat(source-ingest): wire pinmux population before crossverify`
-4. `test(source-ingest): pinmux derivation + T1 gate-open integration`
-5. `chore(targets): populate Nord + Eliza pinmux`
+1. `feat(source-ingest): pinmux fact model + derivation` — LANDED (ebe3757)
+2. `feat(source-ingest): SOURCE_UNRESOLVED singleton (Design B)` — Commit C
+3. `feat(source-ingest): wire pinmux into audio_topology at JSON boundary` — Commit D
+4. `docs(phase3): G-3A.9 DT plumbing gap + WP-SRC-A1/A2 split` — Commit E
 
-**ESTIMATED EFFORT:** **3–4 days** (model + derivation + wiring + 4 tests + 2
-target populations + manual DT cross-check).
+**ESTIMATED EFFORT:** **3–4 days** for the whole A1 body (already ~2 days spent).
 
-**PREREQUISITES:** none blocking. **Coupled with WP-SRC-B for scorecard effect.**
+**PREREQUISITES:** none blocking. **Coupled with WP-SRC-B for scorecard effect,
+AND with WP-SRC-A2 for real-target effect.**
+
+---
+
+### WP-SRC-A2 — DT Plumbing (kernel-source → analysis.dt)
+
+**NORTH-STAR JUSTIFICATION:** WP-SRC-A1 ships the ingestion contract but not the
+producer for its input. Nothing in the runner path currently reads the kernel DT
+tree at `--kernel-source` into `analysis["dt"]`, so the WP-SRC-A1 wiring is inert
+on real targets. WP-SRC-A2 closes that plumbing so `derive_pinmux_from_dt` sees a
+real pinctrl subtree and can emit facts (not the sentinel) on Nord/Eliza. **Does
+not flip a generator alone** — it makes WP-SRC-A1's wiring effective; the joint
+scorecard move requires WP-SRC-B on top of A1+A2.
+
+**OBJECTIVE:** Walk the `--kernel-source` tree for the target's `.dts` / `.dtsi`
+files, parse the pinctrl subtree into the dict shape `derive_pinmux_from_dt`
+consumes (`{"pinctrl": {"<group>": {"function": "...", "pins": [...]}, ...}}`),
+and populate `analysis["dt"]` before `_build_audio_topology` runs. Reuse the
+existing DTS reader that `_crossverify_source_facts.t5` already walks under
+`targets/<t>/dts/` where possible.
+
+**STATUS: NOT STARTED.** Discovered as G-3A.9 during WP-SRC-A1 close-out
+verification (2026-07-22).
+
+**FILES — CREATED / MODIFIED:** TBD at design time. Likely candidates:
+- `orchestrator/source_ingest/dt_reader.py` (NEW) — DT-tree reader.
+- `orchestrator/runners/target_onboarding_runner.py` (MODIFIED) — call the reader,
+  populate `analysis["dt"]`.
+
+**TESTS (T-SRC-A2-*):**
+- **T-SRC-A2-1** unit test on a captured `.dtsi` fixture with an I2S8 pinctrl
+  group → parsed dict has the expected shape.
+- **T-SRC-A2-2** integration: `_build_audio_topology` on real Nord kernel source
+  populates `topology["pinmux"]` with a non-empty list (not the sentinel string).
+- **T-SRC-A2-3** underivable / missing DT tree → `analysis["dt"]={}`; combined
+  with T-SRC-A-3 this yields `topology["pinmux"]="SOURCE_UNRESOLVED"` honestly.
+
+**EXIT CRITERIA (boolean):**
+- ☐ Real Nord `topology["pinmux"]` is a non-empty list of pinmux dicts (not the
+  sentinel string).
+- ☐ T-SRC-A2-1..3 green.
+- ☐ `track_t1` opens `T1.gpio.i2s.*` on the **real** Nord profile.
+- ☐ Full suite still green.
+
+**NORTH-STAR EXIT CHECK:** After WP-SRC-A1 + WP-SRC-A2 alone, the scorecard
+**still stays 1/4** (machine_driver still needs `T4a.qup.*` from WP-SRC-B). A1+A2
+is the "T1 half open" milestone; A1+A2+B is the joint move to 3/4.
+
+**RISKS:**
+- **R-SRC-A2-1** DT parsing pulls in a heavy library or misparses vendor
+  extensions. *Mitigation:* start with a minimum viable dts-python reader on the
+  pinctrl subtree only; scope down to the fields `derive_pinmux_from_dt` reads.
+- **R-SRC-A2-2** silent shape mismatch (parser returns a valid dict that doesn't
+  match `derive_pinmux_from_dt`'s expected keys). *Mitigation:* T-SRC-A2-1 asserts
+  exact shape; regression fixture from Nord kernel source.
+
+**ATOMIC COMMIT SEQUENCE:** TBD at design time.
+
+**ESTIMATED EFFORT:** **2–4 days** (reader + wiring + 3 tests + regression
+fixture capture from a real kernel tree).
+
+**PREREQUISITES:** WP-SRC-A1 landed (which produces the ingestion contract this
+plumbing feeds).
 
 ---
 
 ### WP-SRC-B — Endpoint Source Ingestion + T4a Separator Reconcile (T4a)  ⭐
 
-**NORTH-STAR JUSTIFICATION:** **The pair-completer.** Populating endpoints makes
+**NORTH-STAR JUSTIFICATION:** **The triple-completer.** Populating endpoints makes
 `track_t4a` emit a MATCH row, but §4a-2 proves that row keys as `T4a.qup:…`
 (colon) while both gates scan `T4a.qup.` (dot) — so this WP must **also reconcile
-the producer↔gate separator**. Once reconciled, **WP-SRC-A + WP-SRC-B jointly flip
-machine_driver 0→1 AND codec_stub 0→1** — two generators from one coupled pair.
+the producer↔gate separator**. Once reconciled, **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B
+jointly flip machine_driver 0→1 AND codec_stub 0→1** — two generators from one
+coupled triple.
 
 **OBJECTIVE:** (1) Populate `profile["audio_topology"]["endpoints"]` with QUP/DAI
 endpoint facts so `track_t4a` emits rows; (2) reconcile the `_t4a_subject`
@@ -416,10 +504,10 @@ prefix separator, if the gate side is chosen); codegen engine seam.
 - ☐ machine_driver AND codec_stub gates both open on Nord (joint integration)
 - ☐ Full suite still green; no generator *gate-open* logic modified
 
-**NORTH-STAR EXIT CHECK (measurable):** After WP-SRC-A+B, run
+**NORTH-STAR EXIT CHECK (measurable):** After WP-SRC-A1+A2+B, run
 `--onboard nord-iq10 --generate`. Scorecard MUST move **Nord 1/4 → 3/4** (the
 +machine_driver +codec_stub jump; dt_scaffolding still gated pending WP-SRC-C).
-Eliza likewise. **If Nord stays 1/4 after A+B, the A+B coupling model is
+Eliza likewise. **If Nord stays 1/4 after A1+A2+B, the triple coupling model is
 falsified — STOP and re-diagnose the specific gate that did not open.**
 
 **RISKS:**
@@ -447,8 +535,9 @@ resolved SA8797P QUP map; diff the regenerated fixture.
 **ESTIMATED EFFORT:** **2–3 days** (endpoints derivation is smaller than pinmux;
 the cost concentrates in the separator-reconcile blast-radius review).
 
-**PREREQUISITES:** **WP-SRC-A** (the pair only flips the scorecard together; B is
-sequenced after A so the joint machine_driver integration test has both halves).
+**PREREQUISITES:** **WP-SRC-A1 + WP-SRC-A2** (the triple only flips the scorecard
+together; B is sequenced after A1+A2 so the joint machine_driver integration test
+has both halves and DT plumbing actually resolves `analysis["dt"]`).
 
 ---
 
@@ -547,9 +636,9 @@ commit) + 3–4-day implementation. The producer/gate change and its safety
 regression surface (donor-leak path) are why this is the largest sub-WP, not the
 DTS copy itself.
 
-**PREREQUISITES:** **WP-SRC-A + WP-SRC-B** landed (so the scorecard delta for C is
-cleanly attributable to dt_scaffolding). Independent of the A+B coupling
-otherwise.
+**PREREQUISITES:** **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B** landed (so the scorecard
+delta for C is cleanly attributable to dt_scaffolding). Independent of the
+A1+A2+B coupling otherwise.
 
 ---
 
@@ -718,8 +807,9 @@ state, vocabulary.
 [ ] WP-D        committed 1afec36 (verify on ancestry)   — DONE
 [ ] WP-E        committed 4af8bdd (verify on ancestry)   — DONE
 [x] WP-MCP-BANNER   CLOSED 2026-07-22 (b70e14f, fa72b91, 4923e40, 1c9ebab, 958ec02)
-[ ] WP-SRC-A    (pinmux/T1 — opens machine_driver half; no scorecard move alone)
-[ ] WP-SRC-B    (endpoints/T4a + separator reconcile — A+B flip machine_driver + codec_stub)
+[ ] WP-SRC-A1   (pinmux/T1 sentinel + wiring — opens machine_driver half once WP-SRC-A2 lands; no scorecard move alone)
+[ ] WP-SRC-A2   (DT plumbing: --kernel-source → analysis["dt"] — makes WP-SRC-A1 effective on real targets; no scorecard move alone)
+[ ] WP-SRC-B    (endpoints/T4a + separator reconcile — A1+A2+B jointly flip machine_driver + codec_stub)
 [ ] WP-SRC-C    (DTS/T5 + producer/gate reconcile — flips dt_scaffolding)
 [ ] WP-F        (coverage measurement)
 [ ] WP-G        (coverage render)
@@ -735,17 +825,19 @@ four that produce a GeneratedArtifact.
 |---|---|---|---|---|---|---|---|
 | baseline (HEAD d8edec2) | 1/4 | 1/4 | ✗ | ✗ | ✗ | ✓ | — |
 | WP-MCP-BANNER (✅ CLOSED 2026-07-22, commits b70e14f/fa72b91/4923e40/1c9ebab/958ec02) | 1/4 (*honestly labeled*) | 1/4 | ✗ | ✗ | ✗ | ✓ | — (integrity only — MCP degradation now labeled honestly in both stdout and report) |
-| WP-SRC-A | **1/4 (unchanged — expected)** | 1/4 | ✗ (T1 half open) | ✗ | ✗ | ✓ | — (A alone moves nothing) |
-| WP-SRC-B | **3/4** | **3/4** | ✓ | ✓ | ✗ | ✓ | **A+B jointly** |
+| WP-SRC-A1 | **1/4 (unchanged — expected; A1 inert without WP-SRC-A2)** | 1/4 | ✗ (T1 half wired; DT plumbing missing) | ✗ | ✗ | ✓ | — (A1 alone moves nothing; on real targets emits `"SOURCE_UNRESOLVED"` string) |
+| WP-SRC-A2 | **1/4 (unchanged — expected; A1+A2 opens T1 half only)** | 1/4 | ✗ (T1 half open; T4a still closed) | ✗ | ✗ | ✓ | — (A2 makes A1 effective; still needs B for MD flip) |
+| WP-SRC-B | **3/4** | **3/4** | ✓ | ✓ | ✗ | ✓ | **A1+A2+B jointly** |
 | WP-SRC-C | **4/4** | **4/4** | ✓ | ✓ | ✓ | ✓ | **C** |
 | WP-F | 4/4 (measured) | 4/4 | ✓ | ✓ | ✓ | ✓ | — (measures) |
 | WP-G | 4/4 (rendered) | 4/4 | ✓ | ✓ | ✓ | ✓ | — (renders) |
 
 The scorecard is the single source of truth for "are we moving the north star."
-**Note the deliberate flat step at WP-SRC-A:** A opens only the `T1.gpio.i2s.*`
-half of machine_driver's gate; machine_driver also gates on `T4a.qup.*`, which
-arrives with WP-SRC-B. A 1/4 result after A is a **prediction match, not a
-regression** (see §5a rule 2).
+**Note the deliberate flat steps at WP-SRC-A1 and WP-SRC-A2:** A1 wires the T1
+ingestion contract but is inert on real targets until A2 plumbs the DT; A1+A2
+opens only the `T1.gpio.i2s.*` half of machine_driver's gate; machine_driver
+also gates on `T4a.qup.*`, which arrives with WP-SRC-B. A 1/4 result after A1
+or after A1+A2 is a **prediction match, not a regression** (see §5a rule 2).
 
 ### Manual review gates
 - Each sub-WP's MANUAL VERIFICATION CHECKPOINT must be signed off before its final
@@ -754,23 +846,33 @@ regression** (see §5a rule 2).
   vocab-only, Nord trap-case) gate WP-F/WP-G.
 
 ### Explicit STOP conditions (per sub-WP — the causal model is falsifiable at each)
-> **WP-SRC-A:** the proof is `is_open("T1","gpio.i2s.*")==True` on the Nord profile,
-> NOT a scorecard delta. If that integration assertion fails after A, the pinmux
-> schema (esp. the required `name`, §4a-1) is wrong — STOP.
+> **WP-SRC-A1:** the proof is that `derive_pinmux_from_dt(analysis["dt"])` returns
+> a non-empty `list[PinmuxFact]` when `analysis["dt"]` carries an I2S8 group
+> (T-SRC-A-2 integration on a synthetic DT fixture) AND `is SOURCE_UNRESOLVED`
+> when the DT lacks I2S (T-SRC-A-3), NOT a scorecard delta. On real Nord/Eliza,
+> `analysis["dt"]` is empty (G-3A.9), so the sentinel branch fires — that is a
+> match with the §5 prediction, not a STOP. If T-SRC-A-2 fails on a populated
+> DT fixture, the pinmux schema (esp. the required `name`, §4a-1) is wrong — STOP.
 >
-> **WP-SRC-B (the A+B pair):** if Nord is still **1/4** after A+B, the A+B coupling
-> model is falsified — STOP and read the specific `is_open()` row for machine_driver
-> and codec_stub that did not open (most likely the `T4a.qup.` separator, §4a-2, did
-> not reconcile).
+> **WP-SRC-A2:** the proof is `analysis["dt"]` becomes non-empty on real Nord
+> after `--kernel-source` is resolved (T-SRC-A2-2 end-to-end), which then makes
+> A1's derivation emit facts on the real target. If A2 lands and A1 still emits
+> the sentinel string on real Nord, DT plumbing is not actually reaching
+> `analysis["dt"]` — STOP.
+>
+> **WP-SRC-B (the A1+A2+B triple):** if Nord is still **1/4** after A1+A2+B, the
+> triple coupling model is falsified — STOP and read the specific `is_open()` row
+> for machine_driver and codec_stub that did not open (most likely the
+> `T4a.qup.` separator, §4a-2, did not reconcile).
 >
 > **WP-SRC-C:** if dt_scaffolding is still skipped after C, the T5 producer/gate
 > reconcile did not take — STOP and read the T5 row's verdict against the redefined
 > gate (§4a-3).
 >
-> **Plan-level corollary:** if all three sub-WPs land and Nord is still <4/4 with no
-> cited OBSERVED_PROPOSAL explaining the shortfall, the plan's central thesis (empty
-> source is the blocker) is wrong — halt and re-plan, do not layer WP-F/WP-G
-> diagnostics on top of a broken unlocker.
+> **Plan-level corollary:** if all four sub-WPs (A1+A2+B+C) land and Nord is still
+> <4/4 with no cited OBSERVED_PROPOSAL explaining the shortfall, the plan's central
+> thesis (empty source is the blocker) is wrong — halt and re-plan, do not layer
+> WP-F/WP-G diagnostics on top of a broken unlocker.
 
 ---
 
@@ -786,8 +888,10 @@ regression** (see §5a rule 2).
 
 2. **After every commit, re-measure the scorecard and compare against the §5
    prediction.** "Prediction" is the §5 scorecard ROW for that milestone, not "the
-   total went up" — WP-SRC-A's predicted total is 1/4 (unchanged), so a 1/4 result
-   after A is a match, not a STOP trigger. Only WP-SRC-B (the A+B pair) and WP-SRC-C
+   total went up" — WP-SRC-A1's predicted total is 1/4 (unchanged), WP-SRC-A2's
+   predicted total is also 1/4 (unchanged — the scorecard-flipping half is still
+   gated behind B's separator reconcile), so 1/4 results after A1 or A1+A2 are
+   matches, not STOP triggers. Only WP-SRC-B (the A1+A2+B triple) and WP-SRC-C
    predict an increase. A result that DIVERGES from its predicted row — in either
    direction — triggers that sub-WP's §5 STOP condition.
 
@@ -806,23 +910,31 @@ regression** (see §5a rule 2).
 
 ## §6 — Cross-WP Integration Testing
 
-**How WP-SRC-A + WP-SRC-B + WP-SRC-C + WP-MCP-BANNER + WP-F + WP-G test together:**
-- **Three integration keystones, one per sub-WP** — each is the joint end-to-end
-  test that proves its sub-WP moved the scorecard:
-  - **T-SRC-A-2** — populated pinmux → `is_open("T1","gpio.i2s.*")==True` for Nord
-    (machine_driver half-open; predicted scorecard 1/4 unchanged).
-  - **T-SRC-B-3** — populated pinmux + endpoints + separator reconcile → both
-    `T1.gpio.i2s.*` and `T4a.qup.*` open → `machine_driver` AND `codec_stub` flip
-    0→1 jointly on Nord (predicted scorecard 3/4).
+**How WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B + WP-SRC-C + WP-MCP-BANNER + WP-F + WP-G test together:**
+- **Four integration keystones, one per sub-WP** — each is the joint end-to-end
+  test that proves its sub-WP moved the scorecard (or, for A1/A2, that the
+  contract holds against its predicted 1/4 no-op):
+  - **T-SRC-A-2** — populated pinmux fixture → `derive_pinmux_from_dt` returns
+    non-empty `list[PinmuxFact]` → `is_open("T1","gpio.i2s.*")==True` in the
+    synthetic integration path (machine_driver half-open on fixture; predicted
+    real-target scorecard 1/4 unchanged because `analysis["dt"]` is empty until
+    A2 plumbs it).
+  - **T-SRC-A2-2** — `--kernel-source` resolves to a kernel DT dump → the DT
+    loader populates `analysis["dt"]` → A1's derivation emits facts on real
+    Nord (predicted scorecard 1/4 still unchanged — the T4a half remains gated
+    behind B).
+  - **T-SRC-B-3** — populated pinmux + populated DT + endpoints + separator
+    reconcile → both `T1.gpio.i2s.*` and `T4a.qup.*` open → `machine_driver`
+    AND `codec_stub` flip 0→1 jointly on Nord (predicted scorecard 3/4).
   - **T-SRC-C-2** — staged DTS + producer/gate reconcile →
     `is_open("T5","dts.firmware")==True` for Nord → `dt_scaffolding` flips 0→1
     (predicted scorecard 4/4). Also asserts the donor-leak safety pin
     (firmware-leak DTS still emits DISAGREE_WITH_AUTHORITY + warning=True; the
     gate stays closed on the leak path — the reconcile only opens the clean path).
-- **T-F** consumes the registry populated by a WP-SRC-A/-B/-C run (not
+- **T-F** consumes the registry populated by a WP-SRC-A1/A2/B/C run (not
   synthetic-only fixtures) in at least one integration test, proving the
   source→registry→coverage chain.
-- **T-G** renders a report from a real WP-SRC-A/-B/-C + WP-F Nord run in one
+- **T-G** renders a report from a real WP-SRC-A1/A2/B/C + WP-F Nord run in one
   integration test.
 - **T-MCP** runs the full onboard twice (MCP up/down) asserting the banner +
   scorecard differ honestly.
@@ -832,12 +944,13 @@ regression** (see §5a rule 2).
   cardinality/crossverify tests, ipcat_acquire provenance tests). Run the whole
   `tests/` directory; zero new failures is a hard gate on every commit.
 
-**Manual smoke after each WP (including each WP-SRC sub-WP A/B/C separately):**
+**Manual smoke after each WP (including each WP-SRC sub-WP A1/A2/B/C separately):**
 `--onboard nord-iq10` AND `--onboard eliza` (both, every commit) — Eliza is the
 fresh-target proxy and must not regress while Nord advances. The scorecard row
 in §5 defines the *expected* value at each sub-WP boundary; a mismatch is a
-STOP condition per §5a (with the WP-SRC-A guard-clause: 1/4 unchanged after A
-is a match, not a STOP).
+STOP condition per §5a (with the WP-SRC-A1/A2 guard-clause: 1/4 unchanged after
+A1 alone, or after A1+A2, is a match, not a STOP — the scorecard delta only
+lands with A1+A2+B jointly).
 
 ---
 
@@ -845,7 +958,8 @@ is a match, not a STOP).
 
 | WP | Docs to update / create |
 |---|---|
-| WP-SRC-A | No new design doc. A is a pure-ingestion sub-WP — its design decisions (pinmux source-of-truth precedence, `SOURCE_UNRESOLVED` provenance marker semantics, degradation rules for empty/partial pinmux) are captured **inline in the atomic commit messages** per the WP-SRC-A spec in §4. Update PHASE3_KNOWN_GAPS.md G-3A.7 status when A+B jointly close the T1/T4a half of the gap. |
+| WP-SRC-A1 | No new design doc. A1 is a pure-ingestion-contract sub-WP — its design decisions (Design B bare-singleton `SOURCE_UNRESOLVED` sentinel, identity-not-equality gate predicate, `derive_pinmux_from_dt` contract, wiring pattern in `_build_audio_topology`) are captured **inline in the atomic commit messages** per the WP-SRC-A1 spec in §4. Update PHASE3_KNOWN_GAPS.md G-3A.7 status once A1+A2+B jointly close the T1/T4a half of the gap. |
+| WP-SRC-A2 | No new design doc. A2 is a pure DT-plumbing sub-WP — its design decisions (kernel DT loader source-of-truth, path resolution from `--kernel-source`, degradation when the DT is missing) are captured **inline in the atomic commit messages** per the WP-SRC-A2 spec in §4. Close PHASE3_KNOWN_GAPS.md G-3A.9 once A2 lands and A1's derivation actually returns facts on real Nord. |
 | WP-SRC-B | No new design doc. B's design decisions (endpoint source-of-truth precedence, the `T4a.qup:`↔`T4a.qup.` separator reconcile — producer or gate side, and the reason — and the coupled-with-A scorecard semantics) are captured **inline in the atomic commit messages** per the WP-SRC-B spec in §4. Update PHASE3_ARCHITECTURE.md §9 to move endpoint-side source-ingestion from out-of-scope → in-scope. |
 | WP-SRC-C | **NEW** `docs/WP_SRC_C_DESIGN_NOTE.md` — **blocking first commit** of WP-SRC-C (not a phase-wide design doc; scoped only to C). Documents: the `track_t5` producer/gate reconcile design decision (why track_t5 must be allowed to emit MATCH/PARTIAL_MATCH for `dts.firmware` on clean paths while preserving DISAGREE+warning on donor-leak paths), the DTS staging convention under `targets/<t>/dts/`, and the donor-leak safety-pin contract (regression-guarded by `tests/test_g3a7_t5_dts_probe.py::test_firmware_leak_dts_emits_disagree_not_match`). Also update PHASE3_ARCHITECTURE.md §9 to move DTS-side source-ingestion from out-of-scope → in-scope, and close PHASE3_KNOWN_GAPS.md G-3A.7 once C lands. |
 | WP-MCP-BANNER | Update PHASE3_KNOWN_GAPS.md G-3A.6 → closed; note banner semantics in PHASE3_ARCHITECTURE.md §7 report design. |

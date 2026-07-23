@@ -446,3 +446,78 @@ commits 3–4 land.
   (`evidence_required: true` declaration).
 - `audio_bu_skill/state/nord-iq10-onboarding-23.json:55-70`
   (recorded failure event).
+
+---
+
+## G-3A.9 — DT Plumbing Missing (kernel-source → analysis.dt)
+
+### Title
+
+DT Plumbing Missing (kernel-source → analysis.dt)
+
+### Discovered
+
+2026-07-22, during WP-SRC-A close-out verification (Q4/Q5 north-star
+scorecard check on real Nord).
+
+### Problem
+
+`derive_pinmux_from_dt` and the WP-SRC-A1 wiring at
+`target_onboarding_runner._build_audio_topology` correctly consume
+`analysis["dt"]` — but **nothing in the real runner path populates
+`analysis["dt"]` from the `--kernel-source` tree**. The DT dict shape
+that the T-SRC-A-5 integration test seeds via the `_dt_with_i2s8()`
+fixture (`{"pinctrl": {...}}`) has no producer in production.
+
+Consequence: on real Nord (and Eliza), `analysis.get("dt") or {}` is
+`{}`, `derive_pinmux_from_dt` returns `SOURCE_UNRESOLVED`, and
+`topology["pinmux"]` lands on disk as the literal string
+`"SOURCE_UNRESOLVED"`. The pinmux row never reaches `track_t1`, the
+`gpio.i2s.*` gate stays closed, and the north-star scorecard does NOT
+flip after WP-SRC-A1 alone.
+
+### Why accepted
+
+WP-SRC-A1 (sentinel + wiring) is the demonstrable half. Shipping it now
+proves the ingestion contract end-to-end and unlocks parallel WP-SRC-B
+work on QUP endpoints. DT plumbing is a distinct, self-contained
+follow-on with its own kernel-DT parsing surface and validation.
+
+### Impact
+
+- **Blocks north-star flip.** Without WP-SRC-A2, the WP-SRC-A1 wiring
+  is inert on real targets — the sentinel is what lands on disk.
+- **Blocks the T-SRC-A-5 real-target proof.** The fixture-driven
+  integration test passes without WP-SRC-A2; a real-target smoke check
+  cannot.
+- **Does not affect** the WP-SRC-A1 shipped tests: T-SRC-A-1 (facts
+  derivation), T-SRC-A-3 (sentinel identity), T-SRC-A-5 (wiring on
+  fixture DT) are all green with A1 alone.
+
+### Resolution — WP-SRC-A2 candidate
+
+Estimated ~2-4 days. Scope: add a DT reader that walks
+`--kernel-source` for the target-specific `.dts`/`.dtsi` files, parses
+the pinctrl subtree into the dict shape `derive_pinmux_from_dt` expects,
+and populates `analysis["dt"]` before `_build_audio_topology` runs.
+Reuse the existing DTS reader that `_crossverify_source_facts.t5`
+already walks under `targets/<t>/dts/` where possible.
+
+### Blocks north-star flip
+
+Yes. Nord machine_driver row on the §5 scorecard stays at "gated
+closed" until WP-SRC-A2 lands (independently of WP-SRC-A1 status).
+
+### Cross-references
+
+- `audio_bu_skill/orchestrator/source_ingest/pinmux.py:94-171`
+  (`derive_pinmux_from_dt`; consumer, correctly wired).
+- `audio_bu_skill/orchestrator/runners/target_onboarding_runner.py:622-654`
+  (`_build_audio_topology`; correctly reads `analysis.get("dt")`
+  but has no producer).
+- `audio_bu_skill/tests/test_source_ingest_pinmux.py` (T-SRC-A-5
+  fixture-DT integration test; passes because fixture bypasses the
+  missing plumbing).
+- `audio_bu_skill/docs/PHASE3A_IMPLEMENTATION_PLAN.md` §4 WP-SRC-A2
+  (planned resolution).
+
