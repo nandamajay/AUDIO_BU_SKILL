@@ -32,6 +32,7 @@ from orchestrator.runners.source_intake_runner import discover_evidence
 from orchestrator.source_ingest import (
     SOURCE_UNRESOLVED,
     derive_pinmux_from_dt,
+    read_dt_pinctrl,
     sentinel_to_json_literal,
 )
 
@@ -213,6 +214,18 @@ def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
         analyze_kwargs["timeout"] = analysis_timeout
     result = client.analyze(task_spec, **analyze_kwargs)
     analysis = result.parsed
+
+    # WP-SRC-A2 wiring: populate ``analysis["dt"]`` from the kernel source
+    # tree so ``_build_audio_topology``'s ``derive_pinmux_from_dt`` gate
+    # emits a real pinmux list on real ``--onboard`` runs instead of the
+    # ``SOURCE_UNRESOLVED`` sentinel that always fired before this commit
+    # (see the "nothing currently populates analysis['dt']" note at
+    # ``_build_audio_topology``). Reader returns ``{}`` on missing /
+    # malformed source, which cascades to ``SOURCE_UNRESOLVED`` at the
+    # A1 sentinel path — the T-SRC-A2-3 invariant. Reader-side determinism
+    # (T-SRC-A2-4) is preserved because we do not mutate ``analysis["dt"]``
+    # after this assignment.
+    analysis["dt"] = read_dt_pinctrl(str(kernel_source), target_name)
 
     # --- 3b. pin cross-check: schematic-derived GPIO/net findings (if QGenie
     # returned any) against the candidate patches' DT GPIO assignments. A
@@ -605,14 +618,26 @@ def _map_analysis_to_envelope(
 
 
 def _build_audio_topology(
-    *, analysis: dict[str, Any], pm: dict[str, Any], power_model_hint: dict[str, Any],
-    pin_crosschecks: list[dict[str, Any]], ipcat_findings: dict[str, Any] | None = None,
+    *, analysis: dict[str, Any], pm: dict[str, Any] | None = None,
+    power_model_hint: dict[str, Any] | None = None,
+    pin_crosschecks: list[dict[str, Any]] | None = None,
+    ipcat_findings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Populate BringupCase.audio_topology (slice 4) from QGenie's analysis
     plus the Onboarding Accuracy Upgrade collectors' output. Purely additive
     context alongside the flat codec_part_numbers/codec_verdicts fields --
     never itself finalizes power_model_source or any other NEEDS_REVIEW field.
+
+    WP-SRC-A2 wiring commit: ``pm``, ``power_model_hint``, and
+    ``pin_crosschecks`` are now keyword-only with ``None`` defaults so
+    T-SRC-A2-2's single-kwarg invocation ``_build_audio_topology(analysis=analysis)``
+    (which exercises only the ``analysis["dt"]`` → pinmux path) doesn't
+    ``TypeError``. Production call sites still pass all four explicitly,
+    so this relaxation is call-site-invisible.
     """
+    pm = pm or {}
+    power_model_hint = power_model_hint or {}
+    pin_crosschecks = pin_crosschecks or []
     topology: dict[str, Any] = {
         "codecs": analysis.get("codecs") or [],
         "amplifiers": analysis.get("amplifiers") or [],
