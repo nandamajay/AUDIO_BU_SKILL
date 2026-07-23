@@ -85,40 +85,44 @@ the MCP authority.** This is the gap WP-SRC closes.
 | **WP-E** (advisory provenance registry) | **Indirect / infra** | Records *where facts came from*. Committed (`4af8bdd`), inert. Advisory-only by architecture (§3, §10) — cannot flip a gate. |
 | **WP-F** (family coverage engine) | **No (diagnostic)** | Computes OBSERVED_COMPLETE/GAP against ESM denominator. Tells you the source is empty; does not fill it. |
 | **WP-G** (coverage report render) | **No (diagnostic)** | Renders the `## Fact Coverage` section. Reporting only. |
-| **WP-SRC-A1** (pinmux ingestion contract) | **No alone — inert without A2** | Provides `derive_pinmux_from_dt` + Design B `SOURCE_UNRESOLVED` sentinel + wiring in `_build_audio_topology`. On real Nord/Eliza `analysis["dt"]` is empty (G-3A.9), so this branch always emits the sentinel string until A2 lands. Coupled with WP-SRC-A2 + WP-SRC-B. |
-| **WP-SRC-A2** (DT plumbing: `--kernel-source` → `analysis["dt"]`) | **No alone — half-open with A1** | Loads the kernel DT into `analysis["dt"]` so A1's derivation actually returns a `list[PinmuxFact]` on real targets. Together A1+A2 open *one half* of the machine_driver gate (`T1.gpio.i2s.*`); the other half (`T4a.qup.*`) requires WP-SRC-B → scorecard stays 1/4 until B lands. Closes G-3A.9. |
-| **WP-SRC-B** (endpoints/T4a + separator reconcile) | **YES — jointly with A** | Populates `audio_topology.endpoints` AND reconciles the `T4a.qup:`/`T4a.qup.` producer↔gate separator (crossverify.py:1743-1754 vs machine_driver.py:229 / codec_stub.py:214). **A+B jointly flip `machine_driver` 0→1 AND `codec_stub` 0→1** (scorecard 1/4 → 3/4). |
+| **WP-SRC-A1** (pinmux ingestion contract) | **No alone — inert without A2** | Provides `derive_pinmux_from_dt` + Design B `SOURCE_UNRESOLVED` sentinel + wiring in `_build_audio_topology`. On real Nord/Eliza `analysis["dt"]` is empty (G-3A.9), so this branch always emits the sentinel string until A2 lands. Coupled with WP-SRC-A2 + WP-SRC-B1 + WP-SRC-B2. |
+| **WP-SRC-A2** (DT plumbing: `--kernel-source` → `analysis["dt"]`) | **No alone — half-open with A1** | Loads the kernel DT into `analysis["dt"]` so A1's derivation actually returns a `list[PinmuxFact]` on real targets. Together A1+A2 open *one half* of the machine_driver gate (`T1.gpio.i2s.*`); the other half (`T4a.qup.*`) requires WP-SRC-B1+B2 → scorecard stays 1/4 until the B pair lands. Closes G-3A.9. |
+| **WP-SRC-B1** (endpoint ingestion contract/T4a + separator reconcile) | **No alone — inert without B2** | Ships `derive_endpoints_from_ipcat` + `EndpointFact` + wiring in `_build_audio_topology`, AND reconciles the `T4a.qup:`/`T4a.qup.` producer↔gate separator (crossverify.py:1743-1754 vs machine_driver.py:229 / codec_stub.py:214). Proven on the B1 fixture; on real Nord/Eliza endpoints resolve to `SOURCE_UNRESOLVED` (G-3A.11) until B2 lands. Scorecard stays 1/4. |
+| **WP-SRC-B2** (IPCAT QUP enrichment: `buses` + `chipio_get_qups.json` → track_t4a) | **YES — jointly with A1+A2+B1** | Rewires `derive_endpoints_from_ipcat` onto real IPCAT QUP data so B1's wiring reaches `track_t4a` with populated endpoints on real targets (closes G-3A.11). **A1+A2+B1+B2 jointly flip `machine_driver` 0→1 AND `codec_stub` 0→1** (scorecard 1/4 → 3/4). |
 | **WP-SRC-C** (DTS/T5 + producer/gate reconcile) | **YES — independently** | Stages `targets/<t>/dts/` AND fixes the `track_t5` producer so it can emit MATCH/PARTIAL_MATCH for `dts.firmware` (currently emits only DISAGREE + NCC — see G-3A.7). Flips `dt_scaffolding` 0→1 (scorecard → 4/4). Requires a `WP_SRC_C_DESIGN_NOTE.md` blocking first commit — not pure ingestion. |
 | **WP-MCP-BANNER** (degradation banner) | **Guards the goal** | Makes silent MCP-down degradation loud (closes G-3A.6). Prevents a "success" that is actually a silent skip. |
 
 **Critical honesty gate satisfied:** WP-D/E/F/G are diagnostic/advisory infrastructure
 that, by their own architecture, **cannot** unlock the three skipped generators.
 Per the standing constraint ("don't smuggle diagnostic infrastructure into Phase-3A
-as a substitute for real capability"), **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B + WP-SRC-C
-are all mandatory** (A1+A2+B are a coupled triple that jointly move 2/4 — A1 and A2
-are inert without each other, and A1+A2 are inert on the scorecard without B; C is
-independent and moves the final 1/4). Each sub-WP is designed at full depth in §4.
+as a substitute for real capability"), **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B1 + WP-SRC-B2
++ WP-SRC-C are all mandatory** (A1+A2+B1+B2 are a coupled quadruple that jointly move
+2/4 — A1 and A2 are inert without each other, B1 and B2 are inert without each other,
+and the A1/A2 pair is inert on the scorecard without the B1/B2 pair; C is independent
+and moves the final 1/4). Each sub-WP is designed at full depth in §4.
 
 ---
 
 ## §3 — Sequencing Decision
 
-### Option A — Ship WP-D→WP-G, defer WP-SRC-A1/-A2/-B/-C
+### Option A — Ship WP-D→WP-G, defer WP-SRC-A1/-A2/-B1/-B2/-C
 - Delivers the coverage/observation infrastructure.
 - **GOAL NOT MET.** Nord stays **1/4**, Eliza stays **1/4**. The skill still cannot
   generate 4 artifacts on any target, fresh or otherwise.
 - The coverage report would faithfully report OBSERVED_GAP for the empty families —
   a correct diagnosis of a capability we chose not to build.
 
-### Option B — Insert WP-SRC-A1/-A2/-B/-C into Phase-3A ✅ RECOMMENDED
-- Sequence: **WP-MCP-BANNER → WP-SRC-A1 → WP-SRC-A2 → WP-SRC-B → WP-SRC-C → WP-F → WP-G**
+### Option B — Insert WP-SRC-A1/-A2/-B1/-B2/-C into Phase-3A ✅ RECOMMENDED
+- Sequence: **WP-MCP-BANNER → WP-SRC-A1 → WP-SRC-A2 → WP-SRC-B1 → WP-SRC-B2 → WP-SRC-C → WP-F → WP-G**
   (WP-D, WP-E already committed).
-- **GOAL MET.** WP-SRC-A1 lands the ingestion contract; WP-SRC-A2 plumbs the DT
-  so A1 actually returns facts on real targets; together A1+A2 open the T1 half
-  of `machine_driver`; WP-SRC-B closes the coupled triple (A1+A2+B jointly flip
-  `machine_driver` and `codec_stub`); WP-SRC-C flips `dt_scaffolding`. Nord and
-  Eliza move toward **4/4** (or emit explicit OBSERVED_PROPOSAL per family with
-  a cited reason — never a silent skip).
+- **GOAL MET.** WP-SRC-A1 lands the pinmux ingestion contract; WP-SRC-A2 plumbs the
+  DT so A1 actually returns facts on real targets; together A1+A2 open the T1 half
+  of `machine_driver`; WP-SRC-B1 lands the endpoint ingestion contract + separator
+  reconcile (fixture-proven); WP-SRC-B2 plumbs the real IPCAT QUP data so B1 reaches
+  `track_t4a` on real targets — A1+A2+B1+B2 jointly flip `machine_driver` and
+  `codec_stub`; WP-SRC-C flips `dt_scaffolding`. Nord and Eliza move toward **4/4**
+  (or emit explicit OBSERVED_PROPOSAL per family with a cited reason — never a
+  silent skip).
 - WP-F/WP-G then *measure and report* the newly-populated coverage, which is their
   correct role once there is something to measure.
 
@@ -126,9 +130,9 @@ independent and moves the final 1/4). Each sub-WP is designed at full depth in �
 
 **Option B.** Rationale: the north star is artifact generation on fresh targets.
 WP-D/E/F/G do not move it (§2, proven by the run-21/22 diagnostic). Shipping Phase-3A
-without WP-SRC-A1/-A2/-B/-C would deliver a Phase where, by the plan's own success
-criterion, the goal is definitionally unreachable. Sub-WPs A1/A2 and B feed the
-*existing*, already-wired plumbing path (`_crossverify_source_facts` +
+without WP-SRC-A1/-A2/-B1/-B2/-C would deliver a Phase where, by the plan's own
+success criterion, the goal is definitionally unreachable. Sub-WPs A1/A2 and B1/B2
+feed the *existing*, already-wired plumbing path (`_crossverify_source_facts` +
 `_load_dts_files`, main.py:1099-1137) — no new pipeline seam is required; WP-SRC-C
 additionally reconciles the T5 producer/gate mismatch documented in G-3A.7 (design
 committed via `WP_SRC_C_DESIGN_NOTE.md` before code).
@@ -144,9 +148,19 @@ committed via `WP_SRC_C_DESIGN_NOTE.md` before code).
 > **AMENDMENT (2026-07-22, post-empirical):** The original single WP-SRC
 > block below assumed populating pinmux/endpoints/DTS unlocks all three
 > gated generators. That claim is **empirically falsified** (see §4a). WP-SRC
-> is split into four independently-reviewable sub-WPs — WP-SRC-A1 / -A2 / -B / -C —
-> each with its own design decision and STOP. WP-D, WP-E, WP-MCP-BANNER, WP-F,
-> WP-G are unchanged and retain their original blocks.
+> is split into independently-reviewable sub-WPs — originally four
+> (WP-SRC-A1 / -A2 / -B / -C) — each with its own design decision and STOP.
+> WP-D, WP-E, WP-MCP-BANNER, WP-F, WP-G are unchanged and retain their original
+> blocks.
+>
+> **AMENDMENT (2026-07-23):** WP-SRC-B is further split into **WP-SRC-B1**
+> (endpoint ingestion contract + T4a separator reconcile — fixture-proven, inert
+> on real targets) and **WP-SRC-B2** (real IPCAT QUP data plumbing —
+> `buses` + `chipio_get_qups.json` → `track_t4a`), mirroring the WP-SRC-A1/-A2
+> pattern. The B1/B2 split was forced by **G-3A.11** (`derive_endpoints_from_ipcat`
+> reads a fixture-only key path that no real onboard run populates). The former
+> single WP-SRC-B is now the **coupled pair B1+B2**; A1+A2+B1+B2 is a coupled
+> **quadruple** (§4a-2).
 
 ---
 
@@ -253,7 +267,7 @@ running the live producers (see `tests/test_g3a7_source_gate.py`,
    `tests/fixtures/phase2b/nord_trusted_facts.json` uses the DOT form only because
    it was hand-authored to the gate, not emitted by the producer (admitted in the
    codec_stub.py:204-205 comment). **This is a producer↔gate separator defect
-   that WP-SRC-B must reconcile — populating endpoints alone is necessary but not
+   that WP-SRC-B1 must reconcile — populating endpoints alone is necessary but not
    sufficient.** Confirmed by
    `test_t4a_populated_source_produces_row_but_gate_is_unsatisfiable`.
 
@@ -275,14 +289,20 @@ generator" premise):**
 |---|---|---|---|
 | WP-SRC-A1 | pinmux (T1) — sentinel + wiring | `T1.gpio.i2s.*` half of machine_driver *once WP-SRC-A2 populates `analysis["dt"]`* | **No** — machine_driver also gates on `T4a.qup.*`, AND on real targets A1's wiring is inert until A2 lands |
 | WP-SRC-A2 | DT plumbing (`--kernel-source` → `analysis["dt"]`) | makes WP-SRC-A1's wiring effective on real targets | **No** — depends on WP-SRC-A1 to consume its output |
-| WP-SRC-B | endpoints (T4a) + separator reconcile | `T4a.qup.*` | **No alone; A1+A2+B jointly flip machine_driver 0→1 AND codec_stub 0→1** |
+| WP-SRC-B1 | endpoint ingestion contract (T4a) + separator reconcile — fixture-proven | `T4a.qup.*` on the B1 fixture only | **No** — inert on real targets (endpoints = `SOURCE_UNRESOLVED`, **G-3A.11**); needs WP-SRC-B2 for real data |
+| WP-SRC-B2 | real IPCAT QUP data (`buses` + `chipio_get_qups.json`) → track_t4a | makes WP-SRC-B1's wiring effective on real targets | **No** — depends on WP-SRC-B1 to consume its output; **A1+A2+B1+B2 jointly flip machine_driver 0→1 AND codec_stub 0→1** |
 | WP-SRC-C | DTS (T5) + producer/gate fix | `T5.dts.firmware` | **Yes** — dt_scaffolding 0→1 (but requires a producer change, not just staging) |
 
-So **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B are a coupled triple** — none moves the
-scorecard on its own; the triple moves **two** generators at once (machine_driver
-+ codec_stub). A1 alone is inert on real targets (no DT plumbing); A2 alone has
-nothing to feed; A1+A2 opens the T1 half but machine_driver still needs T4a from
-B. WP-SRC-C independently moves the third. `audioreach_topology` is ungated and
+So **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B1 + WP-SRC-B2 are a coupled quadruple** — none
+moves the scorecard on its own; the quadruple moves **two** generators at once
+(machine_driver + codec_stub). The A1/A2 pair closes the T1 (pinmux) half; the
+B1/B2 pair closes the T4a (endpoints) half. Within each pair, the first member is
+the contract/wiring (inert on real targets) and the second is the real-data
+plumbing: A1 alone is inert on real targets (no DT plumbing), A2 alone has nothing
+to feed; **B1 alone is inert on real targets (endpoints resolve to
+`SOURCE_UNRESOLVED`, G-3A.11), B2 alone has no contract to feed.** machine_driver
+needs BOTH halves (T1 *and* T4a) open; codec_stub needs the T4a half (B1+B2). WP-SRC-C
+independently moves the third generator. `audioreach_topology` is ungated and
 already produces (the standing 1/4). T4b (codec advisory) and T2 (no-DISAGREE)
 gates are **already satisfiable** from `_build_audio_topology`'s `codecs` key —
 they are not blockers, so this split does not touch them.
@@ -294,9 +314,9 @@ they are not blockers, so this split does not touch them.
 **NORTH-STAR JUSTIFICATION:** Opens the `T1.gpio.i2s.*` half of the machine_driver
 gate **once DT plumbing lands** (G-3A.9 / WP-SRC-A2 — see below). **Does not flip
 a generator alone,** for two independent reasons: (i) machine_driver also needs
-`T4a.qup.*` from WP-SRC-B, and (ii) nothing currently populates `analysis["dt"]`
+`T4a.qup.*` from WP-SRC-B1+B2, and (ii) nothing currently populates `analysis["dt"]`
 in the real runner path, so the WP-SRC-A1 wiring is inert on real targets until
-WP-SRC-A2 lands. Its scorecard contribution is realized jointly with WP-SRC-B
+WP-SRC-A2 lands. Its scorecard contribution is realized jointly with WP-SRC-B1+B2
 **and** WP-SRC-A2. It is sequenced first because pinmux derivation is the lower-
 risk half and its schema constraint (the required `name`) is already pinned by
 test.
@@ -379,7 +399,7 @@ Real-target manual DT cross-check is deferred to WP-SRC-A2.
 
 **ESTIMATED EFFORT:** **3–4 days** for the whole A1 body (already ~2 days spent).
 
-**PREREQUISITES:** none blocking. **Coupled with WP-SRC-B for scorecard effect,
+**PREREQUISITES:** none blocking. **Coupled with WP-SRC-B1+B2 for scorecard effect,
 AND with WP-SRC-A2 for real-target effect.**
 
 ---
@@ -392,7 +412,7 @@ tree at `--kernel-source` into `analysis["dt"]`, so the WP-SRC-A1 wiring is iner
 on real targets. WP-SRC-A2 closes that plumbing so `derive_pinmux_from_dt` sees a
 real pinctrl subtree and can emit facts (not the sentinel) on Nord/Eliza. **Does
 not flip a generator alone** — it makes WP-SRC-A1's wiring effective; the joint
-scorecard move requires WP-SRC-B on top of A1+A2.
+scorecard move requires WP-SRC-B1+B2 on top of A1+A2.
 
 **OBJECTIVE:** Walk the `--kernel-source` tree for the target's `.dts` / `.dtsi`
 files, parse the pinctrl subtree into the dict shape `derive_pinmux_from_dt`
@@ -408,7 +428,7 @@ commit sequence below. Real Nord `--onboard` (run-31) confirms
 `"SOURCE_UNRESOLVED"` string to a list of `PinmuxFact` dicts in the
 `gpio.i2s.*` namespace; cross-verify rows expanded **11 → 20**,
 confirming the `T1.gpio.i2s.*` gate now has source-side facts. **T1
-side architecturally solved.** T4a side still open — see WP-SRC-B.
+side architecturally solved.** T4a side still open — see WP-SRC-B1+B2.
 
 **FILES — CREATED / MODIFIED:**
 - `orchestrator/source_ingest/dt_reader.py` (NEW) — DT-tree reader
@@ -440,8 +460,8 @@ side architecturally solved.** T4a side still open — see WP-SRC-B.
 - ☐ Full suite still green.
 
 **NORTH-STAR EXIT CHECK:** After WP-SRC-A1 + WP-SRC-A2 alone, the scorecard
-**still stays 1/4** (machine_driver still needs `T4a.qup.*` from WP-SRC-B). A1+A2
-is the "T1 half open" milestone; A1+A2+B is the joint move to 3/4.
+**still stays 1/4** (machine_driver still needs `T4a.qup.*` from WP-SRC-B1+B2).
+A1+A2 is the "T1 half open" milestone; A1+A2+B1+B2 is the joint move to 3/4.
 
 **RISKS:**
 - **R-SRC-A2-1** DT parsing pulls in a heavy library or misparses vendor
@@ -465,25 +485,38 @@ plumbing feeds).
 
 ---
 
-### WP-SRC-B — Endpoint Source Ingestion + T4a Separator Reconcile (T4a)  ⭐
+### WP-SRC-B1 — Endpoint Ingestion Contract + T4a Separator Reconcile (T4a, fixture wiring)  ⭐
 
-**NORTH-STAR JUSTIFICATION:** **The triple-completer.** Populating endpoints makes
-`track_t4a` emit a MATCH row, but §4a-2 proves that row keys as `T4a.qup:…`
-(colon) while both gates scan `T4a.qup.` (dot) — so this WP must **also reconcile
-the producer↔gate separator**. Once reconciled, **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B
-jointly flip machine_driver 0→1 AND codec_stub 0→1** — two generators from one
-coupled triple.
+**NORTH-STAR JUSTIFICATION:** Ships the endpoint ingestion *contract*
+(`derive_endpoints_from_ipcat` + `EndpointFact` + `_build_audio_topology` wiring)
+and reconciles the producer↔gate separator, **proven on the B1 fixture.**
+Populating endpoints makes `track_t4a` emit a MATCH row, but §4a-2 proves that row
+keys as `T4a.qup:…` (colon) while both gates scan `T4a.qup.` (dot) — so this WP
+also reconciles the separator. **Does not flip a generator alone, and is inert on
+real targets:** nothing in the real runner path populates
+`analysis["ipcat"]["qup_controllers"]`, so on real Nord/Eliza
+`derive_endpoints_from_ipcat` returns `SOURCE_UNRESOLVED` and the endpoints land as
+the literal string (**G-3A.11**). The real-data producer is **WP-SRC-B2**. B1 is to
+endpoints what WP-SRC-A1 is to pinmux: the contract, inert until its plumbing lands.
+**WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B1 + WP-SRC-B2 jointly flip machine_driver 0→1 AND
+codec_stub 0→1** on real targets.
 
-**OBJECTIVE:** (1) Populate `profile["audio_topology"]["endpoints"]` with QUP/DAI
-endpoint facts so `track_t4a` emits rows; (2) reconcile the `_t4a_subject`
-colon/gate-dot mismatch so those rows key under the gate prefix `T4a.qup.`.
+**OBJECTIVE:** (1) Ship `derive_endpoints_from_ipcat` + `EndpointFact` + the wiring
+in `_build_audio_topology` that routes derived endpoints (or the sentinel) into
+`profile["audio_topology"]["endpoints"]`; (2) reconcile the `_t4a_subject`
+colon/gate-dot mismatch so a populated endpoint's row keys under the gate prefix
+`T4a.qup.`. On the B1 fixture (`_qup_populated_analysis`) this proves both the
+contract and the reconcile end-to-end; on real targets the sentinel branch fires
+until WP-SRC-B2 populates the source.
 
-**STATUS: NOT STARTED.** Nord/Eliza `endpoints=None` confirmed this session; the
-separator defect confirmed by `test_t4a_populated_source_produces_row_but_gate_is_unsatisfiable`.
+**STATUS: IN PROGRESS (fixture contract).** Nord/Eliza real endpoints resolve to
+`SOURCE_UNRESOLVED` this session (**G-3A.11** — the real-data gap, deferred to
+WP-SRC-B2); the separator defect confirmed by
+`test_t4a_populated_source_produces_row_but_gate_is_unsatisfiable`.
 
 **FILES — CREATED:**
-- `orchestrator/source_ingest/endpoints.py` — derive T4a endpoint facts (QUP/DAI)
-  into the schema `track_t4a` parses.
+- `orchestrator/source_ingest/endpoints.py` — `derive_endpoints_from_ipcat` +
+  T4a endpoint facts (QUP/DAI) into the schema `track_t4a` parses.
 - `EndpointFact` added to `orchestrator/source_ingest/models.py`.
 - tests: `tests/test_source_ingest_endpoints.py`; separator-reconcile assertions
   extend `tests/test_g3a7_source_gate.py`.
@@ -497,37 +530,44 @@ separator defect confirmed by `test_t4a_populated_source_produces_row_but_gate_i
   *Recommendation:* change the **producer** to emit the dot form and regenerate the
   fixture, because the fixture already encodes the dot form as intended — but this
   MUST be verified against every `T4a.qup.` consumer first.
-- `orchestrator/main.py` — endpoints population before `_run_crossverify`.
-- `targets/nord-iq10/profile.json`, `targets/eliza/profile.json` — endpoints.
+- `orchestrator/runners/target_onboarding_runner.py` — `_build_audio_topology`
+  routes the `derive_endpoints_from_ipcat` result (or the `"SOURCE_UNRESOLVED"`
+  literal via `sentinel_to_json_literal`) into `topology["endpoints"]`.
 
 **FILES — NOT TOUCHED:** codec_stub/machine_driver *gate-open logic* (only the
-prefix separator, if the gate side is chosen); codegen engine seam.
+prefix separator, if the gate side is chosen); codegen engine seam; the real
+IPCAT/`buses` reader (**WP-SRC-B2** scope).
 
 **TESTS (T-SRC-B-*):**
-- **T-SRC-B-1** endpoints ingestion from QUP evidence → non-empty endpoints.
+- **T-SRC-B-1** endpoints ingestion from the fixture QUP shape → non-empty
+  endpoints.
 - **T-SRC-B-2** separator reconcile: `track_t4a` row now keys under `T4a.qup.`
   (dot) and `is_open("T4a", subject)==True`. Updates the assertion in
   `test_t4a_populated_source_produces_row_but_gate_is_unsatisfiable` (which
   currently asserts the gate is *un*satisfiable) — the update is itself the
   regression proof that the defect closed.
-- **T-SRC-B-3** joint flip: on the Nord profile with A+B applied, **both**
-  machine_driver and codec_stub gates open (integration).
+- **T-SRC-B-3** joint flip on the fixture: on the joint fixture profile with
+  A + B1 applied, **both** machine_driver and codec_stub gates open (integration,
+  fixture-driven — the real-target equivalent is T-SRC-B2-* after WP-SRC-B2).
 - **T-SRC-B-4** underivable endpoints → SOURCE_UNRESOLVED.
 - **T-SRC-B-5** determinism on the degradation fixture.
 
 **EXIT CRITERIA (boolean):**
-- ☐ `endpoints` non-empty (or marked) for Nord and Eliza
+- ☐ `derive_endpoints_from_ipcat` returns a non-empty `list[EndpointFact]` on the
+  B1 fixture; `SOURCE_UNRESOLVED` (→ `"SOURCE_UNRESOLVED"` string) on real Nord
+  until WP-SRC-B2 lands
 - ☐ T4a rows key under `T4a.qup.` (separator reconciled); frozen fixture updated
   and every `T4a.qup.` consumer re-verified
-- ☐ T-SRC-B-1…5 green
-- ☐ machine_driver AND codec_stub gates both open on Nord (joint integration)
+- ☐ T-SRC-B-1…5 green (on the fixture)
+- ☐ machine_driver AND codec_stub gates both open on the **fixture** joint profile
 - ☐ Full suite still green; no generator *gate-open* logic modified
 
-**NORTH-STAR EXIT CHECK (measurable):** After WP-SRC-A1+A2+B, run
-`--onboard nord-iq10 --generate`. Scorecard MUST move **Nord 1/4 → 3/4** (the
-+machine_driver +codec_stub jump; dt_scaffolding still gated pending WP-SRC-C).
-Eliza likewise. **If Nord stays 1/4 after A1+A2+B, the triple coupling model is
-falsified — STOP and re-diagnose the specific gate that did not open.**
+**NORTH-STAR EXIT CHECK:** After WP-SRC-B1 alone, the scorecard **stays 1/4** — this
+is expected and correct, mirroring WP-SRC-A1: the endpoint contract + separator
+reconcile are proven on the fixture, but real endpoints are `SOURCE_UNRESOLVED`
+(**G-3A.11**) until WP-SRC-B2 plumbs the real IPCAT QUP data. The measurable proof
+for B1 is that T-SRC-B-1..5 pass on the fixture and the separator is reconciled, NOT
+a scorecard delta. **Do not treat 1/4-after-B1 as a STOP trigger** (see §5a).
 
 **RISKS:**
 - **R-SRC-B-1** separator change breaks a `T4a.*` consumer other than the two
@@ -539,24 +579,111 @@ falsified — STOP and re-diagnose the specific gate that did not open.**
 - **R-SRC-B-3** endpoints derived but shape ≠ what `track_t4a` parses.
   *Mitigation:* T-SRC-B-1 asserts row emission, not just non-empty dict.
 
-**MANUAL VERIFICATION CHECKPOINT:** confirm derived QUP/DAI endpoints match the
-resolved SA8797P QUP map; diff the regenerated fixture.
+**MANUAL VERIFICATION CHECKPOINT:** confirm derived QUP/DAI endpoints (from the
+fixture) match the resolved SA8797P QUP map; diff the regenerated fixture.
 
 **ATOMIC COMMIT SEQUENCE:**
 1. `feat(source-ingest): endpoint fact model`
-2. `feat(source-ingest): derive T4a endpoints from QUP evidence`
+2. `feat(source-ingest): derive T4a endpoints from the fixture QUP shape`
 3. `fix(crossverify): reconcile T4a subject separator with gate prefix` *(design
    decision recorded in message)*
-4. `feat(source-ingest): wire endpoints population before crossverify`
-5. `test(source-ingest): endpoints + T4a gate-open + A+B joint flip`
-6. `chore(targets): populate Nord + Eliza endpoints`
+4. `feat(source-ingest): wire endpoints into audio_topology at JSON boundary`
+5. `test(source-ingest): endpoints + T4a gate-open + fixture joint flip`
 
 **ESTIMATED EFFORT:** **2–3 days** (endpoints derivation is smaller than pinmux;
 the cost concentrates in the separator-reconcile blast-radius review).
 
-**PREREQUISITES:** **WP-SRC-A1 + WP-SRC-A2** (the triple only flips the scorecard
-together; B is sequenced after A1+A2 so the joint machine_driver integration test
-has both halves and DT plumbing actually resolves `analysis["dt"]`).
+**PREREQUISITES:** **WP-SRC-A1 + WP-SRC-A2**. **Coupled with WP-SRC-B2 for
+real-target scorecard effect** (B1 is the fixture contract; B2 is the real-data
+plumbing — the pair is the T4a analog of the A1/A2 pair).
+
+---
+
+### WP-SRC-B2 — IPCAT QUP Enrichment (real endpoints → track_t4a)  ⭐
+
+**NORTH-STAR JUSTIFICATION:** Closes **G-3A.11**. Wires real IPCAT QUP data into the
+endpoint fact producer so WP-SRC-B1's wiring actually reaches `track_t4a` with
+populated endpoints on real Nord (today it reads a fixture-only key path and returns
+`SOURCE_UNRESOLVED` on every real run). **Does not flip a generator alone** — it is
+the real-data half of the endpoint pair; **WP-SRC-B1 + WP-SRC-B2 jointly move Nord
+machine_driver + codec_stub 0→1 on real targets** (together with the A1+A2 pinmux
+half and the B1 separator reconcile). Mirrors the WP-SRC-A1 (contract) → WP-SRC-A2
+(real plumbing) pattern exactly.
+
+**OBJECTIVE:** Rewire `derive_endpoints_from_ipcat` to read real QUP facts from
+`analysis["buses"]` (the freeform bus strings, e.g. `"I2C QUP2_SE4 (i2c18,
+gpio154/155) …"`) **and** the cached IPCAT evidence
+`targets/<t>/evidence/ipcat/chipio_get_qups.json` (the structured 27-item QUP list),
+instead of the fixture-only key path `analysis["ipcat"]["qup_controllers"]` that no
+producer populates on real onboard runs.
+
+**STATUS: NOT STARTED.**
+
+**FILES — CREATED / MODIFIED:**
+- `orchestrator/source_ingest/endpoints.py` (MODIFIED) — rewrite the reader path to
+  consume `analysis["buses"]` + `chipio_get_qups.json`, **OR**
+- `orchestrator/source_ingest/ipcat_reader.py` (NEW) — a dedicated IPCAT QUP reader
+  analogous to `dt_reader.py`, whose output `derive_endpoints_from_ipcat` consumes
+  (preferred: keeps the producer thin and mirrors the A2 `read_dt_pinctrl` split).
+- `orchestrator/runners/target_onboarding_runner.py` (MODIFIED) — populate the
+  real IPCAT/QUP source before `_build_audio_topology` runs (reuse the existing
+  IPCAT evidence discovery under `targets/<t>/evidence/ipcat/` where possible).
+- `tests/test_source_ingest_endpoints.py` (MODIFIED) / new
+  `tests/test_source_ingest_ipcat_reader.py` — T-SRC-B2-* against the captured real
+  Nord `chipio_get_qups.json` fixture.
+
+**TESTS (T-SRC-B2-*):** on the real Nord fixture (captured
+`chipio_get_qups.json`) —
+- **T-SRC-B2-1** unit: the reader parses `chipio_get_qups.json` + `buses` into the
+  `EndpointFact` shape `track_t4a` parses.
+- **T-SRC-B2-2** integration: `_build_audio_topology` on real Nord populates
+  `topology["endpoints"]` with a non-empty list (not the sentinel string).
+- **T-SRC-B2-3** missing / underivable IPCAT evidence → `SOURCE_UNRESOLVED`
+  honestly (degradation path preserved).
+- **T-SRC-B2-4** determinism: two runs → byte-identical endpoints.
+
+**EXIT CRITERIA (boolean):**
+- ☐ Real Nord `--onboard` produces `profile.audio_topology.endpoints` as a
+  **non-empty list**, not the `"SOURCE_UNRESOLVED"` string.
+- ☐ Cross-verify emits `T4a.qup.*` rows on the **real** Nord profile.
+- ☐ machine_driver AND codec_stub gates both open on **real** Nord (jointly with
+  the A1+A2 pinmux half and the B1 separator reconcile).
+- ☐ T-SRC-B2-1..4 green.
+- ☐ Full suite still green; no generator gate-open logic modified.
+
+**NORTH-STAR EXIT CHECK (measurable):** After WP-SRC-A1+A2+B1+B2, run
+`--onboard nord-iq10 --generate`. Scorecard MUST move **Nord 1/4 → 3/4** (the
++machine_driver +codec_stub jump; dt_scaffolding still gated pending WP-SRC-C).
+Eliza likewise. **If Nord stays 1/4 after A1+A2+B1+B2, the coupled-quadruple model
+is falsified — STOP and read the specific `is_open()` row for machine_driver and
+codec_stub that did not open.**
+
+**RISKS / MANUAL VERIFICATION** *(analogous to WP-SRC-A2)*:
+- **R-SRC-B2-1** IPCAT payload shape parsing risk — the cached
+  `chipio_get_qups.json` or `buses` strings misparse or pull vendor-specific noise.
+  *Mitigation:* start with a minimum-viable reader scoped to the fields
+  `derive_endpoints_from_ipcat` needs; T-SRC-B2-1 asserts exact shape against the
+  captured fixture.
+- **R-SRC-B2-2** silent shape mismatch (reader returns a valid dict that doesn't
+  match the endpoint schema). *Mitigation:* T-SRC-B2-1 asserts the `track_t4a`-row
+  emission, not just non-empty.
+- **R-SRC-B2-3** non-determinism from evidence-file ordering. *Mitigation:*
+  T-SRC-B2-4 byte-identical determinism gate.
+- **MANUAL VERIFICATION CHECKPOINT:** real-target smoke gate — run `--onboard
+  nord-iq10`, confirm `endpoints` is a real list and the T4a rows are present and
+  open; diff derived QUP endpoints against the resolved SA8797P QUP map.
+
+**ATOMIC COMMIT SEQUENCE:**
+1. `test(wp-src-b2): red baseline on captured Nord chipio_get_qups.json`
+2. `feat(wp-src-b2): IPCAT QUP reader (buses + chipio_get_qups.json)`
+3. `feat(wp-src-b2): rewire derive_endpoints_from_ipcat onto the real reader`
+4. `feat(wp-src-b2): populate real IPCAT QUP source before _build_audio_topology`
+5. `test(wp-src-b2): real-Nord endpoints non-empty + T4a gate-open joint flip`
+
+**ESTIMATED EFFORT:** **2–3 days.**
+
+**PREREQUISITES:** **WP-SRC-B1 landed** (the fixture wiring contract that B2 feeds
+with real data), on top of **WP-SRC-A1 + WP-SRC-A2**.
 
 ---
 
@@ -655,9 +782,9 @@ commit) + 3–4-day implementation. The producer/gate change and its safety
 regression surface (donor-leak path) are why this is the largest sub-WP, not the
 DTS copy itself.
 
-**PREREQUISITES:** **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B** landed (so the scorecard
-delta for C is cleanly attributable to dt_scaffolding). Independent of the
-A1+A2+B coupling otherwise.
+**PREREQUISITES:** **WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B1 + WP-SRC-B2** landed (so the
+scorecard delta for C is cleanly attributable to dt_scaffolding). Independent of the
+A1+A2+B1+B2 coupling otherwise.
 
 ---
 
@@ -828,7 +955,8 @@ state, vocabulary.
 [x] WP-MCP-BANNER   CLOSED 2026-07-22 (b70e14f, fa72b91, 4923e40, 1c9ebab, 958ec02)
 [ ] WP-SRC-A1   (pinmux/T1 sentinel + wiring — opens machine_driver half once WP-SRC-A2 lands; no scorecard move alone)
 [x] WP-SRC-A2   (DT plumbing: --kernel-source → analysis["dt"] — makes WP-SRC-A1 effective on real targets; no scorecard move alone) ✅ CLOSED 2026-07-22 (`29bf385` + `04bb164` + `cedb3f6`)
-[ ] WP-SRC-B    (endpoints/T4a + separator reconcile — A1+A2+B jointly flip machine_driver + codec_stub)
+[ ] WP-SRC-B1   (endpoint ingestion contract/T4a + separator reconcile — fixture-proven, inert on real targets; no scorecard move alone)
+[ ] WP-SRC-B2   (IPCAT QUP enrichment: buses + chipio_get_qups.json → track_t4a — A1+A2+B1+B2 jointly flip machine_driver + codec_stub)
 [ ] WP-SRC-C    (DTS/T5 + producer/gate reconcile — flips dt_scaffolding)
 [ ] WP-F        (coverage measurement)
 [ ] WP-G        (coverage render)
@@ -845,18 +973,22 @@ four that produce a GeneratedArtifact.
 | baseline (HEAD d8edec2) | 1/4 | 1/4 | ✗ | ✗ | ✗ | ✓ | — |
 | WP-MCP-BANNER (✅ CLOSED 2026-07-22, commits b70e14f/fa72b91/4923e40/1c9ebab/958ec02) | 1/4 (*honestly labeled*) | 1/4 | ✗ | ✗ | ✗ | ✓ | — (integrity only — MCP degradation now labeled honestly in both stdout and report) |
 | WP-SRC-A1 | **1/4 (unchanged — expected; A1 inert without WP-SRC-A2)** | 1/4 | ✗ (T1 half wired; DT plumbing missing) | ✗ | ✗ | ✓ | — (A1 alone moves nothing; on real targets emits `"SOURCE_UNRESOLVED"` string) |
-| WP-SRC-A2 | **1/4 (unchanged — expected; A1+A2 opens T1 half only)** | 1/4 | ✗ (T1 half open; T4a still closed) | ✗ | ✗ | ✓ | ✅ **CLOSED 2026-07-22** (`29bf385` + `04bb164` + `cedb3f6`) — Nord run-31 confirms `pinmux` list of `PinmuxFact` dicts, cross-verify rows 11 → 20; scorecard stays 1/4 pending WP-SRC-B (T4a coupled-pair completion) |
-| WP-SRC-B | **3/4** | **3/4** | ✓ | ✓ | ✗ | ✓ | **A1+A2+B jointly** |
+| WP-SRC-A2 | **1/4 (unchanged — expected; A1+A2 opens T1 half only)** | 1/4 | ✗ (T1 half open; T4a still closed) | ✗ | ✗ | ✓ | ✅ **CLOSED 2026-07-22** (`29bf385` + `04bb164` + `cedb3f6`) — Nord run-31 confirms `pinmux` list of `PinmuxFact` dicts, cross-verify rows 11 → 20; scorecard stays 1/4 pending WP-SRC-B1+B2 (T4a coupled-pair completion) |
+| WP-SRC-B1 | **1/4 (unchanged — expected; fixture wiring only, real endpoints still `SOURCE_UNRESOLVED` per G-3A.11)** | 1/4 | ✗ (T4a contract wired + separator reconciled, but inert on real targets) | ✗ | ✗ | ✓ | — (B1 alone moves nothing on the scorecard; contract proven on the B1 fixture, real endpoints resolve to `SOURCE_UNRESOLVED`) |
+| WP-SRC-B2 | **3/4** | **3/4** | ✓ | ✓ | ✗ | ✓ | **A1+A2+B1+B2 jointly** (B2 plumbs real IPCAT QUP data → machine_driver + codec_stub flip 0→1) |
 | WP-SRC-C | **4/4** | **4/4** | ✓ | ✓ | ✓ | ✓ | **C** |
 | WP-F | 4/4 (measured) | 4/4 | ✓ | ✓ | ✓ | ✓ | — (measures) |
 | WP-G | 4/4 (rendered) | 4/4 | ✓ | ✓ | ✓ | ✓ | — (renders) |
 
 The scorecard is the single source of truth for "are we moving the north star."
-**Note the deliberate flat steps at WP-SRC-A1 and WP-SRC-A2:** A1 wires the T1
-ingestion contract but is inert on real targets until A2 plumbs the DT; A1+A2
-opens only the `T1.gpio.i2s.*` half of machine_driver's gate; machine_driver
-also gates on `T4a.qup.*`, which arrives with WP-SRC-B. A 1/4 result after A1
-or after A1+A2 is a **prediction match, not a regression** (see §5a rule 2).
+**Note the deliberate flat steps at WP-SRC-A1, WP-SRC-A2, and WP-SRC-B1:** A1 wires
+the T1 ingestion contract but is inert on real targets until A2 plumbs the DT; A1+A2
+opens only the `T1.gpio.i2s.*` half of machine_driver's gate; machine_driver also
+gates on `T4a.qup.*`. B1 wires the T4a endpoint contract + separator reconcile but is
+inert on real targets until B2 plumbs the real IPCAT QUP data (endpoints resolve to
+`SOURCE_UNRESOLVED`, G-3A.11); the T4a half arrives with **WP-SRC-B2**. A 1/4 result
+after A1, after A1+A2, or after A1+A2+B1 is a **prediction match, not a regression**
+(see §5a rule 2).
 
 ### Manual review gates
 - Each sub-WP's MANUAL VERIFICATION CHECKPOINT must be signed off before its final
@@ -879,16 +1011,32 @@ or after A1+A2 is a **prediction match, not a regression** (see §5a rule 2).
 > the sentinel string on real Nord, DT plumbing is not actually reaching
 > `analysis["dt"]` — STOP.
 >
-> **WP-SRC-B (the A1+A2+B triple):** if Nord is still **1/4** after A1+A2+B, the
-> triple coupling model is falsified — STOP and read the specific `is_open()` row
-> for machine_driver and codec_stub that did not open (most likely the
-> `T4a.qup.` separator, §4a-2, did not reconcile).
+> **WP-SRC-B1 (fixture contract):** the proof is that `derive_endpoints_from_ipcat`
+> returns a non-empty `list[EndpointFact]` on the B1 fixture (T-SRC-B-1) AND the
+> reconciled `track_t4a` row keys under `T4a.qup.` (dot) with `is_open("T4a",
+> subject)==True` on the fixture joint profile (T-SRC-B-2/-3), NOT a scorecard
+> delta. On real Nord/Eliza, endpoints resolve to `SOURCE_UNRESOLVED` (G-3A.11), so
+> the sentinel branch fires — that is a match with the §5 prediction (**1/4
+> unchanged**), not a STOP. **B1 STOP:** if T-SRC-B-1…5 do not all go green, or the
+> separator does not reconcile on the fixture (the gate stays unsatisfiable with a
+> populated endpoint), the fixture wiring contract is broken — STOP.
+>
+> **WP-SRC-B2 (real-data plumbing → the A1+A2+B1+B2 quadruple):** the proof is that
+> real Nord `--onboard` produces `profile.audio_topology.endpoints` as a **non-empty
+> list** (not the `"SOURCE_UNRESOLVED"` string) and cross-verify emits `T4a.qup.*`
+> rows on the real profile (T-SRC-B2-2). **B2 STOP:** if B2 lands and real Nord
+> endpoints are still the sentinel string, the real IPCAT/`buses` reader is not
+> reaching `derive_endpoints_from_ipcat` — STOP. **Quadruple STOP:** if Nord is
+> still **1/4** after A1+A2+B1+B2 (i.e. the scorecard does not flip **1/4 → 3/4**),
+> the coupled-quadruple model is falsified — STOP and read the specific `is_open()`
+> row for machine_driver and codec_stub that did not open (most likely the
+> `T4a.qup.` separator, §4a-2, did not reconcile, or the T1 half regressed).
 >
 > **WP-SRC-C:** if dt_scaffolding is still skipped after C, the T5 producer/gate
 > reconcile did not take — STOP and read the T5 row's verdict against the redefined
 > gate (§4a-3).
 >
-> **Plan-level corollary:** if all four sub-WPs (A1+A2+B+C) land and Nord is still
+> **Plan-level corollary:** if all sub-WPs (A1+A2+B1+B2+C) land and Nord is still
 > <4/4 with no cited OBSERVED_PROPOSAL explaining the shortfall, the plan's central
 > thesis (empty source is the blocker) is wrong — halt and re-plan, do not layer
 > WP-F/WP-G diagnostics on top of a broken unlocker.
@@ -898,9 +1046,9 @@ or after A1+A2 is a **prediction match, not a regression** (see §5a rule 2).
 ## §5a — Test-First + Smoke-Test Discipline (applies to every WP-SRC sub-WP)
 
 1. **Write the failing test before the code.** Each sub-WP's gate-open integration
-   test (T-SRC-A-2, T-SRC-B-3, T-SRC-C-2) MUST be committed in a failing state (or
-   demonstrably red on a clean checkout) BEFORE the implementation commit that makes
-   it pass. The committed G-3A.7 probes
+   test (T-SRC-A-2, T-SRC-B-3, T-SRC-B2-2, T-SRC-C-2) MUST be committed in a failing
+   state (or demonstrably red on a clean checkout) BEFORE the implementation commit
+   that makes it pass. The committed G-3A.7 probes
    (`tests/test_g3a7_source_gate.py`, `tests/test_g3a7_t5_dts_probe.py`) are the
    starting red state — several already assert the *current* unsatisfiability and
    will invert as the reconciles land.
@@ -908,11 +1056,12 @@ or after A1+A2 is a **prediction match, not a regression** (see §5a rule 2).
 2. **After every commit, re-measure the scorecard and compare against the §5
    prediction.** "Prediction" is the §5 scorecard ROW for that milestone, not "the
    total went up" — WP-SRC-A1's predicted total is 1/4 (unchanged), WP-SRC-A2's
-   predicted total is also 1/4 (unchanged — the scorecard-flipping half is still
-   gated behind B's separator reconcile), so 1/4 results after A1 or A1+A2 are
-   matches, not STOP triggers. Only WP-SRC-B (the A1+A2+B triple) and WP-SRC-C
-   predict an increase. A result that DIVERGES from its predicted row — in either
-   direction — triggers that sub-WP's §5 STOP condition.
+   predicted total is also 1/4 (unchanged), and WP-SRC-B1's predicted total is
+   likewise 1/4 (unchanged — the scorecard-flipping real-data half is still gated
+   behind B2's IPCAT plumbing), so 1/4 results after A1, A1+A2, or A1+A2+B1 are
+   matches, not STOP triggers. Only WP-SRC-B2 (completing the A1+A2+B1+B2 quadruple)
+   and WP-SRC-C predict an increase. A result that DIVERGES from its predicted row —
+   in either direction — triggers that sub-WP's §5 STOP condition.
 
 3. **Smoke both targets after every commit.** Run `--onboard nord-iq10` AND
    `--onboard eliza` after each commit, not just at WP end. Eliza is the fresh-target
@@ -921,7 +1070,7 @@ or after A1+A2 is a **prediction match, not a regression** (see §5a rule 2).
 4. **No gate-open logic edits.** WP-SRC may edit source-fact producers, the T4a/T5
    separator/verdict reconcile, and profile/target data — but MUST NOT edit the
    `is_open()` semantics (model.py:213-237) or the generators' gate-prefix scan
-   logic beyond the single separator reconcile named in WP-SRC-B/-C. Any diff that
+   logic beyond the single separator reconcile named in WP-SRC-B1/-C. Any diff that
    touches `_GATING_OPEN_VERDICTS` or a generator's `is_open(...)` call is
    out-of-scope and a STOP.
 
@@ -929,9 +1078,9 @@ or after A1+A2 is a **prediction match, not a regression** (see §5a rule 2).
 
 ## §6 — Cross-WP Integration Testing
 
-**How WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B + WP-SRC-C + WP-MCP-BANNER + WP-F + WP-G test together:**
-- **Four integration keystones, one per sub-WP** — each is the joint end-to-end
-  test that proves its sub-WP moved the scorecard (or, for A1/A2, that the
+**How WP-SRC-A1 + WP-SRC-A2 + WP-SRC-B1 + WP-SRC-B2 + WP-SRC-C + WP-MCP-BANNER + WP-F + WP-G test together:**
+- **Five integration keystones, one per sub-WP** — each is the joint end-to-end
+  test that proves its sub-WP moved the scorecard (or, for A1/A2/B1, that the
   contract holds against its predicted 1/4 no-op):
   - **T-SRC-A-2** — populated pinmux fixture → `derive_pinmux_from_dt` returns
     non-empty `list[PinmuxFact]` → `is_open("T1","gpio.i2s.*")==True` in the
@@ -941,19 +1090,25 @@ or after A1+A2 is a **prediction match, not a regression** (see §5a rule 2).
   - **T-SRC-A2-2** — `--kernel-source` resolves to a kernel DT dump → the DT
     loader populates `analysis["dt"]` → A1's derivation emits facts on real
     Nord (predicted scorecard 1/4 still unchanged — the T4a half remains gated
-    behind B).
+    behind B1+B2).
   - **T-SRC-B-3** — populated pinmux + populated DT + endpoints + separator
-    reconcile → both `T1.gpio.i2s.*` and `T4a.qup.*` open → `machine_driver`
-    AND `codec_stub` flip 0→1 jointly on Nord (predicted scorecard 3/4).
+    reconcile on the **fixture** joint profile → both `T1.gpio.i2s.*` and
+    `T4a.qup.*` open → `machine_driver` AND `codec_stub` flip 0→1 jointly on the
+    fixture (predicted real-target scorecard 1/4 unchanged — real endpoints are
+    `SOURCE_UNRESOLVED` until B2 plumbs them).
+  - **T-SRC-B2-2** — real Nord IPCAT QUP data (`buses` + `chipio_get_qups.json`)
+    → `derive_endpoints_from_ipcat` returns a non-empty list on the real target →
+    `T4a.qup.*` open on the real Nord profile → `machine_driver` AND `codec_stub`
+    flip 0→1 jointly on Nord (predicted scorecard 3/4).
   - **T-SRC-C-2** — staged DTS + producer/gate reconcile →
     `is_open("T5","dts.firmware")==True` for Nord → `dt_scaffolding` flips 0→1
     (predicted scorecard 4/4). Also asserts the donor-leak safety pin
     (firmware-leak DTS still emits DISAGREE_WITH_AUTHORITY + warning=True; the
     gate stays closed on the leak path — the reconcile only opens the clean path).
-- **T-F** consumes the registry populated by a WP-SRC-A1/A2/B/C run (not
+- **T-F** consumes the registry populated by a WP-SRC-A1/A2/B1/B2/C run (not
   synthetic-only fixtures) in at least one integration test, proving the
   source→registry→coverage chain.
-- **T-G** renders a report from a real WP-SRC-A1/A2/B/C + WP-F Nord run in one
+- **T-G** renders a report from a real WP-SRC-A1/A2/B1/B2/C + WP-F Nord run in one
   integration test.
 - **T-MCP** runs the full onboard twice (MCP up/down) asserting the banner +
   scorecard differ honestly.
@@ -977,9 +1132,10 @@ lands with A1+A2+B jointly).
 
 | WP | Docs to update / create |
 |---|---|
-| WP-SRC-A1 | No new design doc. A1 is a pure-ingestion-contract sub-WP — its design decisions (Design B bare-singleton `SOURCE_UNRESOLVED` sentinel, identity-not-equality gate predicate, `derive_pinmux_from_dt` contract, wiring pattern in `_build_audio_topology`) are captured **inline in the atomic commit messages** per the WP-SRC-A1 spec in §4. Update PHASE3_KNOWN_GAPS.md G-3A.7 status once A1+A2+B jointly close the T1/T4a half of the gap. |
+| WP-SRC-A1 | No new design doc. A1 is a pure-ingestion-contract sub-WP — its design decisions (Design B bare-singleton `SOURCE_UNRESOLVED` sentinel, identity-not-equality gate predicate, `derive_pinmux_from_dt` contract, wiring pattern in `_build_audio_topology`) are captured **inline in the atomic commit messages** per the WP-SRC-A1 spec in §4. Update PHASE3_KNOWN_GAPS.md G-3A.7 status once A1+A2+B1+B2 jointly close the T1/T4a half of the gap. |
 | WP-SRC-A2 | No new design doc. A2 is a pure DT-plumbing sub-WP — its design decisions (kernel DT loader source-of-truth, path resolution from `--kernel-source`, degradation when the DT is missing) are captured **inline in the atomic commit messages** per the WP-SRC-A2 spec in §4. Close PHASE3_KNOWN_GAPS.md G-3A.9 once A2 lands and A1's derivation actually returns facts on real Nord. |
-| WP-SRC-B | No new design doc. B's design decisions (endpoint source-of-truth precedence, the `T4a.qup:`↔`T4a.qup.` separator reconcile — producer or gate side, and the reason — and the coupled-with-A scorecard semantics) are captured **inline in the atomic commit messages** per the WP-SRC-B spec in §4. Update PHASE3_ARCHITECTURE.md §9 to move endpoint-side source-ingestion from out-of-scope → in-scope. |
+| WP-SRC-B1 | No new design doc. B1's design decisions (endpoint source-of-truth precedence, the `T4a.qup:`↔`T4a.qup.` separator reconcile — producer or gate side, and the reason — the `EndpointFact` contract, and the coupled-with-A/B2 scorecard semantics) are captured **inline in the atomic commit messages** per the WP-SRC-B1 spec in §4. Update PHASE3_ARCHITECTURE.md §9 to move endpoint-side source-ingestion from out-of-scope → in-scope. |
+| WP-SRC-B2 | No new design doc. B2 is a pure real-data-plumbing sub-WP — its design decisions (IPCAT QUP source-of-truth: `analysis["buses"]` + `evidence/ipcat/chipio_get_qups.json`, the reader split analogous to `dt_reader.py`, degradation when IPCAT evidence is missing) are captured **inline in the atomic commit messages** per the WP-SRC-B2 spec in §4. Close PHASE3_KNOWN_GAPS.md **G-3A.11** once B2 lands and `derive_endpoints_from_ipcat` returns real endpoints (not the sentinel) on real Nord. |
 | WP-SRC-C | **NEW** `docs/WP_SRC_C_DESIGN_NOTE.md` — **blocking first commit** of WP-SRC-C (not a phase-wide design doc; scoped only to C). Documents: the `track_t5` producer/gate reconcile design decision (why track_t5 must be allowed to emit MATCH/PARTIAL_MATCH for `dts.firmware` on clean paths while preserving DISAGREE+warning on donor-leak paths), the DTS staging convention under `targets/<t>/dts/`, and the donor-leak safety-pin contract (regression-guarded by `tests/test_g3a7_t5_dts_probe.py::test_firmware_leak_dts_emits_disagree_not_match`). Also update PHASE3_ARCHITECTURE.md §9 to move DTS-side source-ingestion from out-of-scope → in-scope, and close PHASE3_KNOWN_GAPS.md G-3A.7 once C lands. |
 | WP-MCP-BANNER | Update PHASE3_KNOWN_GAPS.md G-3A.6 → closed; note banner semantics in PHASE3_ARCHITECTURE.md §7 report design. |
 | WP-F | **NEW** `docs/WP_F_DESIGN.md` if the DESIGN_REVISION is not itself the design of record; else cite it. Update §7 report-position note. |
@@ -1013,7 +1169,7 @@ Phase-3A ships when ALL hold:
 
 **Scope boundary (what Phase-3A does NOT gate on):** greenfield/no-DT coverage,
 engine activation (codegen NullEngine stays default), and any `is_open()` semantic
-change beyond the two named WP-SRC-B/-C separator/verdict reconciles. These are
+change beyond the two named WP-SRC-B1/-C separator/verdict reconciles. These are
 Phase-3B (§9).
 
 ---
