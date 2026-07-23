@@ -15,15 +15,26 @@ Contract these tests pin down for the implementation:
    whose entries carry a ``name`` in the ``gpio.i2s.*`` namespace (per §4a-1
    of the plan). The `name` is REQUIRED — a row without it closes the gate
    even if the pin/function match (see G-3A.7 R-SRC-A-1).
-2. Integration: after ingestion runs against a Nord-shaped fixture,
-   ``track_t1`` (crossverify.py:416) no longer short-circuits on empty
-   pinmux; it emits ≥1 row keyed under ``T1.gpio.i2s.`` and
-   ``facts.is_open("T1", subject) == True`` for at least one such row.
+2. Unit-level seam: feeding ``derive_pinmux_from_dt``'s output directly
+   into ``track_t1(snapshot, source=pinmux)`` (crossverify.py:416) yields
+   ≥1 row keyed under ``T1.gpio.i2s.`` and ``facts.is_open("T1", subject)
+   == True`` for at least one such row. This test does NOT exercise
+   ``_build_audio_topology`` and does NOT prove
+   ``profile.audio_topology.pinmux`` populates end-to-end — that is T-SRC-A-5.
 3. Underivable pinmux (DT missing I2S8, or ambiguous) yields an explicit
    ``SOURCE_UNRESOLVED`` sentinel/marker — NEVER a silent empty list, never
    a fabricated guess. This is the §5 evidence-doctrine hard rule.
 4. Determinism: two independent calls to ``derive_pinmux_from_dt`` with
    byte-identical input produce byte-identical output (sorted-key JSON).
+5. End-to-end integration: after the wiring commit lands,
+   ``_build_audio_topology`` (target_onboarding_runner.py:602-636) — the
+   exact function that assembles ``profile.audio_topology`` on the
+   ``--onboard`` path — MUST populate ``topology["pinmux"]`` as a non-empty
+   list of dicts, each carrying a ``name`` in the ``gpio.i2s.*`` namespace,
+   when handed a Nord-shaped analysis carrying an I2S8-bearing DT. Red on
+   this commit (source_ingest exists but is not wired into
+   ``_build_audio_topology``); green only after the next WP-SRC-A commit
+   threads ``derive_pinmux_from_dt`` into that runner.
 
 Failure discipline: each test guards its import in try/except so the
 red-state output names the specific missing surface. Mirrors the idiom
@@ -186,24 +197,37 @@ def test_src_a_1_pinmux_derivation_from_i2s8_dt() -> None:
     )
 
 
-# ── T-SRC-A-2: integration — track_t1 opens T1.gpio.i2s.* on Nord profile ────
+# ── T-SRC-A-2: unit seam — derive_pinmux_from_dt → track_t1 opens gate ───────
 
 
-def test_src_a_2_track_t1_opens_gpio_i2s_after_ingestion() -> None:
-    """After ingestion runs, `track_t1(snapshot, source=pinmux)` returns
-    ≥1 row keyed under `T1.gpio.i2s.` AND `facts.is_open("T1", subject) ==
-    True` for at least one such row.
+def test_src_a_2_derive_pinmux_to_track_t1_seam() -> None:
+    """Unit-level seam test between ``derive_pinmux_from_dt`` and
+    ``track_t1``: feeding the derivation function's output directly to
+    ``track_t1(snapshot, source=pinmux)`` produces ≥1 row keyed under
+    ``T1.gpio.i2s.`` AND ``facts.is_open("T1", subject) == True`` for at
+    least one such row.
 
-    This is the north-star measurable proof: WP-SRC-A alone keeps the
-    scorecard at 1/4 (machine_driver still needs T4a from WP-SRC-B), but
-    the integration assertion that flips is `is_open("T1", …) == True`
-    on the Nord-shaped fixture. That is what this test pins down.
+    Scope disclaimer (deliberate): this test does NOT exercise
+    ``_build_audio_topology`` (target_onboarding_runner.py:602-636), does
+    NOT run ``target_onboarding_runner``, and does NOT read
+    ``profile.audio_topology.pinmux``. It proves the two functions compose
+    correctly at their direct call boundary — nothing more. End-to-end
+    integration (``--onboard`` populates ``profile.audio_topology.pinmux``)
+    is T-SRC-A-5.
+
+    Rationale for the two-test split: the pure ingestion contract
+    (T-SRC-A-1) and the downstream gate contract (this test) can be
+    satisfied without any runner wiring; wiring is a separate concern
+    covered by T-SRC-A-5. Keeping this test at the seam level makes
+    WP-SRC-A commit 1 (pure function) independently landable and
+    independently verifiable.
 
     Fails on baseline for two independent reasons:
-      (a) `orchestrator.source_ingest.pinmux` is missing entirely; and
-      (b) even if we hand-authored source rows, the Nord `profile.json`
-          has `audio_topology.pinmux=None` — no ingestion path exists to
-          populate it. See G-3A.7 for the full source→gate causal chain.
+      (a) ``orchestrator.source_ingest.pinmux`` is missing entirely; and
+      (b) even if we hand-authored source rows, the Nord ``profile.json``
+          has ``audio_topology.pinmux=None`` — but end-to-end evidence
+          for (b) lives in T-SRC-A-5, not here. See G-3A.7 for the full
+          source→gate causal chain.
     """
     try:
         from orchestrator.reasoning.crossverify import track_t1
@@ -431,6 +455,136 @@ def test_src_a_4_determinism_across_two_runs() -> None:
     print(f"PASS: T-SRC-A-4 determinism holds across two runs ({len(canon_1)} chars)")
 
 
+# ── T-SRC-A-5: end-to-end integration — _build_audio_topology populates pinmux ─
+
+
+def test_src_a_5_build_audio_topology_populates_pinmux() -> None:
+    """End-to-end integration: after WP-SRC-A wiring lands,
+    ``_build_audio_topology`` (target_onboarding_runner.py:602-636) —
+    the exact assembler used by ``--onboard`` to build
+    ``profile.audio_topology`` — MUST populate ``topology["pinmux"]`` as
+    a non-empty list of dicts, each carrying a ``name`` field starting
+    with ``gpio.i2s.``, when handed a Nord-shaped analysis whose DT
+    carries an I2S8 pinctrl group.
+
+    Why this test exists separately from T-SRC-A-2: T-SRC-A-2 proves
+    ``derive_pinmux_from_dt`` and ``track_t1`` compose at their direct
+    call boundary. It does NOT prove the runner path threads ingestion
+    into ``profile.audio_topology.pinmux``. Without this test, a WP-SRC-A
+    wiring commit could add wiring code, pass T-SRC-A-1..4, and still
+    leave ``profile.audio_topology.pinmux=None`` on real
+    ``--onboard nord-iq10``. This test is the gate that catches that.
+
+    Expected state on the current commit (WP-SRC-A commit 1 — pure
+    ingestion function, no runner wiring): RED. ``_build_audio_topology``
+    at target_onboarding_runner.py:602-636 does not add ``pinmux`` to
+    the returned topology dict — grep confirms:
+    ``grep -n '"pinmux"' orchestrator/runners/target_onboarding_runner.py``
+    yields zero hits.
+
+    Expected state after the next WP-SRC-A wiring commit: GREEN. The
+    wiring commit MUST derive pinmux via ``derive_pinmux_from_dt`` from
+    the analysis-carried DT and add the result under
+    ``topology["pinmux"]`` in ``_build_audio_topology``.
+
+    Fixture shape rationale: passes a Nord-shaped ``analysis`` dict
+    carrying a ``dt`` sub-field with the same I2S8 pinctrl group as
+    ``_dt_with_i2s8()``. The other ``_build_audio_topology`` parameters
+    (``pm``, ``power_model_hint``, ``pin_crosschecks``, ``ipcat_findings``)
+    are handed minimal-but-valid stubs — this test is scoped to the
+    ``pinmux`` field, not to the rest of the audio_topology assembly.
+    """
+    try:
+        from orchestrator.runners.target_onboarding_runner import (
+            _build_audio_topology,
+        )
+    except ImportError as exc:  # pragma: no cover — sanity
+        raise AssertionError(
+            f"T-SRC-A-5: cannot import _build_audio_topology from "
+            f"orchestrator.runners.target_onboarding_runner: {exc}"
+        ) from exc
+
+    # A Nord-shaped analysis dict whose ``dt`` sub-field carries the same
+    # I2S8 pinctrl group as _dt_with_i2s8(). The wiring commit must read
+    # the DT from wherever the runner surfaces it in `analysis` and hand
+    # it to derive_pinmux_from_dt. Kept parser-agnostic on purpose.
+    analysis: dict[str, Any] = {
+        "codecs": [],
+        "amplifiers": [],
+        "mics": [],
+        "speakers": [],
+        "soundwire": {},
+        "audio_stack": {},
+        "missing_evidence": [],
+        # DT carried on the analysis dict for the runner to consume.
+        # Wiring commit is free to relocate this field (e.g. under a
+        # separate `source` sub-dict); if it does, this test's fixture
+        # updates accordingly. What must not change: the assertion that
+        # topology["pinmux"] ends up non-empty with gpio.i2s.* names.
+        "dt": _dt_with_i2s8(),
+    }
+    pm: dict[str, Any] = {"power_model_source": "NEEDS_REVIEW"}
+    power_model_hint: dict[str, Any] = {}
+    pin_crosschecks: list[dict[str, Any]] = []
+
+    topology = _build_audio_topology(
+        analysis=analysis,
+        pm=pm,
+        power_model_hint=power_model_hint,
+        pin_crosschecks=pin_crosschecks,
+        ipcat_findings=None,
+    )
+
+    assert isinstance(topology, dict), (
+        f"T-SRC-A-5: _build_audio_topology returned {type(topology).__name__}, "
+        "expected dict."
+    )
+
+    pinmux = topology.get("pinmux")
+    assert pinmux is not None, (
+        "T-SRC-A-5: topology['pinmux'] is None (or missing). "
+        "_build_audio_topology at target_onboarding_runner.py:602-636 does "
+        "not thread derive_pinmux_from_dt into the returned topology dict. "
+        "This is the wiring gap that the next WP-SRC-A commit MUST close: "
+        "call derive_pinmux_from_dt on the analysis-carried DT and assign "
+        "the result under topology['pinmux'] (or SOURCE_UNRESOLVED marker "
+        "when the DT lacks I2S). Until then, --onboard nord-iq10 leaves "
+        "profile.audio_topology.pinmux=None and the machine_driver gate "
+        "(prefix scan T1.gpio.i2s.*) stays closed regardless of MCP state."
+    )
+    assert isinstance(pinmux, list), (
+        f"T-SRC-A-5: topology['pinmux'] is {type(pinmux).__name__}, expected "
+        f"list. Value: {pinmux!r}."
+    )
+    assert pinmux, (
+        "T-SRC-A-5: topology['pinmux'] is empty list. Silent empty on a DT "
+        "carrying an I2S8 group is a §5 evidence-doctrine violation — the "
+        "wiring commit must either populate pinmux from the DT or emit "
+        "SOURCE_UNRESOLVED, never a silent []."
+    )
+
+    # Every entry must be a dict shape (the profile is JSON-serialised, so
+    # dataclass-style objects need to reduce to dicts before storage).
+    for i, entry in enumerate(pinmux):
+        assert isinstance(entry, dict), (
+            f"T-SRC-A-5: topology['pinmux'][{i}] is {type(entry).__name__}, "
+            f"expected dict (profile.audio_topology is JSON-serialised at "
+            f"the runner boundary). Value: {entry!r}."
+        )
+        name = entry.get("name")
+        assert isinstance(name, str) and name.startswith("gpio.i2s."), (
+            f"T-SRC-A-5: topology['pinmux'][{i}]['name'] = {name!r}. Every "
+            "entry must carry a `name` field under the gpio.i2s.* namespace "
+            "(per §4a-1 / R-SRC-A-1). Without this, machine_driver's prefix "
+            "scan (T1.gpio.i2s.*) stays closed even after wiring lands."
+        )
+
+    print(
+        f"PASS: T-SRC-A-5 _build_audio_topology → topology['pinmux'] has "
+        f"{len(pinmux)} entries, all under gpio.i2s.* namespace"
+    )
+
+
 # ── Runner ───────────────────────────────────────────────────────────────────
 
 
@@ -442,9 +596,10 @@ def main() -> None:
 
     tests = [
         ("T-SRC-A-1", test_src_a_1_pinmux_derivation_from_i2s8_dt),
-        ("T-SRC-A-2", test_src_a_2_track_t1_opens_gpio_i2s_after_ingestion),
+        ("T-SRC-A-2", test_src_a_2_derive_pinmux_to_track_t1_seam),
         ("T-SRC-A-3", test_src_a_3_underivable_pinmux_marks_source_unresolved),
         ("T-SRC-A-4", test_src_a_4_determinism_across_two_runs),
+        ("T-SRC-A-5", test_src_a_5_build_audio_topology_populates_pinmux),
     ]
     failures: list[tuple[str, AssertionError]] = []
     for label, fn in tests:
