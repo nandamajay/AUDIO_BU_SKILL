@@ -401,13 +401,28 @@ and populate `analysis["dt"]` before `_build_audio_topology` runs. Reuse the
 existing DTS reader that `_crossverify_source_facts.t5` already walks under
 `targets/<t>/dts/` where possible.
 
-**STATUS: NOT STARTED.** Discovered as G-3A.9 during WP-SRC-A1 close-out
-verification (2026-07-22).
+**STATUS: ✅ CLOSED 2026-07-22.** Discovered as G-3A.9 during WP-SRC-A1
+close-out verification (2026-07-22); closed the same day by the atomic
+commit sequence below. Real Nord `--onboard` (run-31) confirms
+`profile.audio_topology.pinmux` transitions from the literal
+`"SOURCE_UNRESOLVED"` string to a list of `PinmuxFact` dicts in the
+`gpio.i2s.*` namespace; cross-verify rows expanded **11 → 20**,
+confirming the `T1.gpio.i2s.*` gate now has source-side facts. **T1
+side architecturally solved.** T4a side still open — see WP-SRC-B.
 
-**FILES — CREATED / MODIFIED:** TBD at design time. Likely candidates:
-- `orchestrator/source_ingest/dt_reader.py` (NEW) — DT-tree reader.
-- `orchestrator/runners/target_onboarding_runner.py` (MODIFIED) — call the reader,
-  populate `analysis["dt"]`.
+**FILES — CREATED / MODIFIED:**
+- `orchestrator/source_ingest/dt_reader.py` (NEW) — DT-tree reader
+  (`read_dt_pinctrl`).
+- `orchestrator/source_ingest/__init__.py` (MODIFIED) — re-export
+  `read_dt_pinctrl`.
+- `orchestrator/runners/target_onboarding_runner.py` (MODIFIED) —
+  import `read_dt_pinctrl`; populate `analysis["dt"]` after the
+  runner produces `analysis`; relax `_build_audio_topology` signature
+  so `pm` / `power_model_hint` / `pin_crosschecks` are keyword-only
+  with `None` defaults (T-SRC-A2-2 exercises only the
+  `analysis["dt"]` → pinmux path).
+- `tests/test_source_ingest_dt_reader.py` (NEW) — T-SRC-A2-1..4
+  contract, integration, missing-source, determinism tests.
 
 **TESTS (T-SRC-A2-*):**
 - **T-SRC-A2-1** unit test on a captured `.dtsi` fixture with an I2S8 pinctrl
@@ -436,7 +451,11 @@ is the "T1 half open" milestone; A1+A2+B is the joint move to 3/4.
   match `derive_pinmux_from_dt`'s expected keys). *Mitigation:* T-SRC-A2-1 asserts
   exact shape; regression fixture from Nord kernel source.
 
-**ATOMIC COMMIT SEQUENCE:** TBD at design time.
+**ATOMIC COMMIT SEQUENCE:**
+  1. `29bf385` — test(wp-src-a2): red baseline
+  2. `04bb164` — feat(wp-src-a2): kernel-DT reader (A2-1/3/4 green)
+  3. `cedb3f6` — feat(wp-src-a2): wire read_dt_pinctrl into
+     _build_audio_topology (A2-2 green)
 
 **ESTIMATED EFFORT:** **2–4 days** (reader + wiring + 3 tests + regression
 fixture capture from a real kernel tree).
@@ -808,7 +827,7 @@ state, vocabulary.
 [ ] WP-E        committed 4af8bdd (verify on ancestry)   — DONE
 [x] WP-MCP-BANNER   CLOSED 2026-07-22 (b70e14f, fa72b91, 4923e40, 1c9ebab, 958ec02)
 [ ] WP-SRC-A1   (pinmux/T1 sentinel + wiring — opens machine_driver half once WP-SRC-A2 lands; no scorecard move alone)
-[ ] WP-SRC-A2   (DT plumbing: --kernel-source → analysis["dt"] — makes WP-SRC-A1 effective on real targets; no scorecard move alone)
+[x] WP-SRC-A2   (DT plumbing: --kernel-source → analysis["dt"] — makes WP-SRC-A1 effective on real targets; no scorecard move alone) ✅ CLOSED 2026-07-22 (`29bf385` + `04bb164` + `cedb3f6`)
 [ ] WP-SRC-B    (endpoints/T4a + separator reconcile — A1+A2+B jointly flip machine_driver + codec_stub)
 [ ] WP-SRC-C    (DTS/T5 + producer/gate reconcile — flips dt_scaffolding)
 [ ] WP-F        (coverage measurement)
@@ -826,7 +845,7 @@ four that produce a GeneratedArtifact.
 | baseline (HEAD d8edec2) | 1/4 | 1/4 | ✗ | ✗ | ✗ | ✓ | — |
 | WP-MCP-BANNER (✅ CLOSED 2026-07-22, commits b70e14f/fa72b91/4923e40/1c9ebab/958ec02) | 1/4 (*honestly labeled*) | 1/4 | ✗ | ✗ | ✗ | ✓ | — (integrity only — MCP degradation now labeled honestly in both stdout and report) |
 | WP-SRC-A1 | **1/4 (unchanged — expected; A1 inert without WP-SRC-A2)** | 1/4 | ✗ (T1 half wired; DT plumbing missing) | ✗ | ✗ | ✓ | — (A1 alone moves nothing; on real targets emits `"SOURCE_UNRESOLVED"` string) |
-| WP-SRC-A2 | **1/4 (unchanged — expected; A1+A2 opens T1 half only)** | 1/4 | ✗ (T1 half open; T4a still closed) | ✗ | ✗ | ✓ | — (A2 makes A1 effective; still needs B for MD flip) |
+| WP-SRC-A2 | **1/4 (unchanged — expected; A1+A2 opens T1 half only)** | 1/4 | ✗ (T1 half open; T4a still closed) | ✗ | ✗ | ✓ | ✅ **CLOSED 2026-07-22** (`29bf385` + `04bb164` + `cedb3f6`) — Nord run-31 confirms `pinmux` list of `PinmuxFact` dicts, cross-verify rows 11 → 20; scorecard stays 1/4 pending WP-SRC-B (T4a coupled-pair completion) |
 | WP-SRC-B | **3/4** | **3/4** | ✓ | ✓ | ✗ | ✓ | **A1+A2+B jointly** |
 | WP-SRC-C | **4/4** | **4/4** | ✓ | ✓ | ✓ | ✓ | **C** |
 | WP-F | 4/4 (measured) | 4/4 | ✓ | ✓ | ✓ | ✓ | — (measures) |
