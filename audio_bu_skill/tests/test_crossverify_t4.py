@@ -158,7 +158,7 @@ def test_a_qup_match_direct_high() -> None:
     assert len(rows) == 1
     row = rows[0]
     assert row.track == "T4a"
-    assert row.subject == "qup:QUPv3_0_SE_5"
+    assert row.subject == "qup.QUPv3_0_SE_5"
     assert row.verdict == "MATCH"
     assert row.warning is False
     assert row.coverage_gap_reason is None
@@ -192,7 +192,7 @@ def test_b_qup_partial_match_capability_differs() -> None:
     rows = track_t4a(snapshot=snap, source=source, kb=None)
     assert len(rows) == 1
     row = rows[0]
-    assert row.subject == "qup:QUPv3_0_SE_7"
+    assert row.subject == "qup.QUPv3_0_SE_7"
     assert row.verdict == "PARTIAL_MATCH"
     assert row.warning is False  # WP7 req 4 — PARTIAL_MATCH warning=False
     assert row.coverage_gap_reason is None
@@ -225,7 +225,7 @@ def test_c_named_core_match_direct_high() -> None:
     rows = track_t4a(snapshot=snap, source=source, kb=None)
     assert len(rows) == 1
     row = rows[0]
-    assert row.subject == "core:Audio - QAIF"
+    assert row.subject == "core.Audio - QAIF"
     assert row.verdict == "MATCH"
     assert row.warning is False
     assert row.confidence == "high"  # DIRECT
@@ -253,7 +253,7 @@ def test_d_named_core_absent_is_disagree_high() -> None:
     rows = track_t4a(snapshot=snap, source=source, kb=None)
     assert len(rows) == 1
     row = rows[0]
-    assert row.subject == "core:qdsp6ss_0"
+    assert row.subject == "core.qdsp6ss_0"
     assert row.verdict == "DISAGREE_WITH_AUTHORITY"
     assert row.warning is True  # WP7 req 4 — DISAGREE warns
     assert row.coverage_gap_reason is None
@@ -283,7 +283,7 @@ def test_e_bus_match_indirect_medium() -> None:
     rows = track_t4a(snapshot=snap, source=source, kb=None)
     assert len(rows) == 1
     row = rows[0]
-    assert row.subject == "bus:audio_core_noc"
+    assert row.subject == "bus.audio_core_noc"
     assert row.verdict == "MATCH"
     assert row.warning is False
     assert row.coverage_gap_reason is None
@@ -309,7 +309,7 @@ def test_f_qup_authority_unavailable_is_ncc() -> None:
     rows = track_t4a(snapshot=snap, source=source, kb=None)
     assert len(rows) == 1
     row = rows[0]
-    assert row.subject == "qup:QUPv3_0_SE_5"
+    assert row.subject == "qup.QUPv3_0_SE_5"
     assert row.verdict == "NOT_CROSS_CHECKABLE"
     assert row.coverage_gap_reason == "authority_unavailable"
     assert row.warning is False  # NOT_CROSS_CHECKABLE warning defaults False

@@ -1741,7 +1741,19 @@ def _t4a_lookup_bus(
 
 
 def _t4a_subject(claim: dict[str, Any]) -> str:
-    """Build a stable subject string like ``qup:QUPv3_0_SE_5`` for the row."""
+    """Build a stable subject string like ``qup.QUPv3_0_SE_5`` for the row.
+
+    Separator is a DOT so the projected fact keys as ``T4a.qup.<label>``,
+    which matches the prefix scans in the WP-SRC-B joint gates
+    (``machine_driver.py:229`` and ``codec_stub.py:214``, both scan the
+    literal ``"T4a.qup."``). Reconciled in WP-SRC-B commit 2 — see
+    ``docs/PHASE3A_IMPLEMENTATION_PLAN.md`` §WP-SRC-B for the blast-radius
+    analysis (only production emitter of the colon form; both fixtures
+    and gate scanners were already dot-form). The
+    ``test_g3a7_source_gate.py`` finding-guard was updated in the same
+    commit to assert the reconciled dot form (its own docstring predicted
+    this flip).
+    """
     kind = str(claim.get("kind") or "").strip().lower() or "unknown"
     label = (
         claim.get("engine")
@@ -1751,7 +1763,7 @@ def _t4a_subject(claim: dict[str, Any]) -> str:
         or claim.get("group_name")
         or "<unnamed>"
     )
-    return f"{kind}:{label}"
+    return f"{kind}.{label}"
 
 
 def _t4a_citations(authority_tool: str, chip_name: str, rule_id: str) -> list[str]:

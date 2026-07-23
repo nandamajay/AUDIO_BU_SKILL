@@ -5,29 +5,21 @@ in-memory generated_case source list, does `track_t1` / `track_t4a` produce
 rows, and after `project_facts` do those rows satisfy the machine_driver /
 codec_stub `is_open` gates?
 
-This test is written to assert GROUND TRUTH, established by executing the
-live producers — NOT the literal input values proposed in the task spec.
-Two of the task's proposed positive assertions are UNSATISFIABLE by the live
-code, and this file pins down *why* with explicit assertions so the finding
-is regression-guarded rather than buried in prose:
+Historical note (pre-WP-SRC-B commit 2): this file used to pin the T4a
+colon-vs-dot separator MISMATCH — the producer emitted
+``T4a.qup:QUPv3_0_SE_5`` (colon) while the gates scanned ``T4a.qup.``
+(dot), so a populated source could not open either the machine_driver
+Gate-2 or the codec_stub Gate-1. Its docstring explicitly predicted the
+reconcile: "if the producer/gate separators were reconciled, update this
+test and G-3A.7."
 
-  1. T1 opens the machine_driver Gate-1 ONLY when the source entry carries a
-     `name` that renders into the `gpio.i2s.*` namespace. The task's bare
-     `{"pin":147,"function":1}` yields subject `"? (GPIO 147)"` → key
-     `T1.? (GPIO 147)`, which does NOT match the gate prefix `T1.gpio.i2s.`.
-     (crossverify.py:459 builds `subject = f"{name} (GPIO {pin})"`; name
-     defaults to "?" at :458.)
-
-  2. T4a is UNSATISFIABLE from live source against the current gates. The
-     live producer `_t4a_subject` (crossverify.py:1743-1754) builds
-     `f"{kind}:{label}"` with a COLON, yielding e.g. `T4a.qup:QUPv3_0_SE_5`.
-     Both the codec_stub Gate-1 (codec_stub.py:214) and the machine_driver
-     Gate-2 (machine_driver.py:229) scan the prefix `T4a.qup.` with a DOT.
-     `"T4a.qup:...".startswith("T4a.qup.")` is False → zero open rows, no
-     matter what QUP endpoint the source declares. The frozen fixture
-     `tests/fixtures/phase2b/nord_trusted_facts.json` uses the DOT form
-     (`T4a.qup.se3`) because it was hand-authored to the gate, not emitted
-     by the producer (see the codec_stub.py:204-205 comment admitting this).
+Current state (post-reconcile): the T4a producer at
+``crossverify.py:_t4a_subject`` emits DOT-separated subjects
+(``qup.QUPv3_0_SE_5``), so the projected fact keys as
+``T4a.qup.<label>`` — which DOES match the gate prefix. The two T4a
+tests now assert the *positive* case: a populated QUP source both
+produces a MATCH row AND opens the joint machine_driver / codec_stub
+gate. T1 tests are unchanged (T1's colon/dot bug does not exist).
 
 Run: ``PYTHONPATH=audio_bu_skill python3 -m tests.test_g3a7_source_gate``
 """
@@ -167,14 +159,20 @@ def test_t4a_empty_source_yields_zero_rows() -> None:
 # ── T4a: populated source produces a row, but it CANNOT open the gate ───────
 
 
-def test_t4a_populated_source_produces_row_but_gate_is_unsatisfiable() -> None:
-    """THE central G-3A.7 finding for codec_stub.
+def test_t4a_populated_source_opens_gate_after_separator_reconcile() -> None:
+    """POST-RECONCILE positive assertion for codec_stub / machine_driver T4a.
 
-    A populated QUP endpoint DOES produce a MATCH row — proving the source
-    side is *not* the blocker for T4a. But the row's subject uses a COLON
-    separator (`qup:QUPv3_0_SE_5`), while the gate scans a DOT prefix
-    (`T4a.qup.`). So there are ZERO open rows under the gate prefix: codec_stub
-    is subject-FORMAT-limited, not source-limited.
+    A populated QUP endpoint DOES produce a MATCH row AND now opens the
+    joint T4a gate: WP-SRC-B commit 2 reconciled the producer at
+    ``crossverify.py:_t4a_subject`` from colon (``qup:QUPv3_0_SE_5``) to
+    dot (``qup.QUPv3_0_SE_5``), so the projected fact keys as
+    ``T4a.qup.<label>`` — which matches the ``T4a.qup.`` prefix scanned
+    by both ``machine_driver.py:229`` and ``codec_stub.py:214``.
+
+    This is the *reconciled* replacement for the historical G-3A.7
+    finding-guard (see file docstring) that pinned the mismatch and told
+    the reader to update this test and G-3A.7 when the separators were
+    reconciled. That reconcile just happened.
     """
     snap = _t4a_snap(se_number=5, engine="QUPv3_0_SE_5")
     rows = track_t4a(
@@ -186,24 +184,28 @@ def test_t4a_populated_source_produces_row_but_gate_is_unsatisfiable() -> None:
         "populated T4a source with matching authority should MATCH; "
         f"got verdicts {[r.verdict for r in rows]!r}"
     )
-    # The producer uses a colon separator.
+    # Post-reconcile: producer emits DOT-separated subjects.
     facts = project_facts(rows)
     keys = sorted(facts.rows_by_track_subject)
-    assert any(k.startswith("T4a.qup:") for k in keys), (
-        f"live producer must emit a colon-separated T4a.qup: key; got {keys!r}"
+    assert any(k.startswith("T4a.qup.") for k in keys), (
+        f"reconciled producer must emit a dot-separated T4a.qup. key; got {keys!r}"
     )
-    # ...and therefore NONE match the dot-prefixed gate.
+    # Regression guard: no colon-form leak. If this fires, some code path
+    # is still emitting the legacy colon separator.
+    assert not any(k.startswith("T4a.qup:") for k in keys), (
+        f"legacy colon-form key must be gone post-reconcile; got {keys!r}"
+    )
+    # ...and now the dot-prefixed gate opens.
     open_rows = _open_rows_for_prefix(rows, _T4A_GATE_PREFIX)
-    assert open_rows == [], (
-        "FINDING FALSIFIED if this fires: a live T4a row opened the "
-        f"dot-prefixed gate {_T4A_GATE_PREFIX!r}. Got "
-        f"{[r.subject for r in open_rows]!r}. If the producer/gate separators "
-        "were reconciled, update this test and G-3A.7."
+    assert len(open_rows) >= 1, (
+        f"populated T4a source must open ≥1 row under gate {_T4A_GATE_PREFIX!r} "
+        f"after separator reconcile; got {[r.subject for r in open_rows]!r} "
+        f"(all keys: {keys!r})"
     )
     print(
-        "PASS: T4a populated source → MATCH row keyed 'T4a.qup:...' (colon), "
-        "which does NOT match gate prefix 'T4a.qup.' (dot). codec_stub is "
-        "subject-format-limited, not source-limited."
+        "PASS: T4a populated source → MATCH row keyed 'T4a.qup....' (dot), "
+        "opens the joint machine_driver / codec_stub gate. G-3A.7 finding "
+        "resolved by WP-SRC-B commit 2 producer-side separator reconcile."
     )
 
 
@@ -212,7 +214,7 @@ def main() -> None:
     test_t1_task_literal_input_does_not_open_gate()
     test_t1_named_source_opens_machine_driver_gate()
     test_t4a_empty_source_yields_zero_rows()
-    test_t4a_populated_source_produces_row_but_gate_is_unsatisfiable()
+    test_t4a_populated_source_opens_gate_after_separator_reconcile()
     print("ALL TESTS PASSED")
 
 
