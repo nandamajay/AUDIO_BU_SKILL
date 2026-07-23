@@ -294,13 +294,19 @@ def test_src_a_2_derive_pinmux_to_track_t1_seam() -> None:
 
 def test_src_a_3_underivable_pinmux_marks_source_unresolved() -> None:
     """Underivable pinmux (no I2S pinctrl in DT) → explicit
-    `SOURCE_UNRESOLVED` sentinel/marker, NEVER a silent empty list, NEVER a
+    `SOURCE_UNRESOLVED` sentinel, NEVER a silent empty list, NEVER a
     fabricated guess.
 
     This is the §5 evidence-doctrine hard rule as it applies to WP-SRC-A:
     the ingestion path must fail loudly and specifically, not silently
     return `[]` (which is indistinguishable from a healthy run that
     genuinely has zero pins to report).
+
+    Design B contract (WP-SRC-A commit C): the sentinel is a bare
+    ``object()`` singleton and the canonical predicate is IDENTITY —
+    ``result is SOURCE_UNRESOLVED``. Equality / isinstance checks are
+    intentionally not part of the contract; ``is`` is the only correct
+    form.
 
     Fails on baseline: the whole source_ingest package is missing, and no
     SOURCE_UNRESOLVED constant exists.
@@ -315,8 +321,8 @@ def test_src_a_3_underivable_pinmux_marks_source_unresolved() -> None:
         ) from exc
 
     # Locate the SOURCE_UNRESOLVED sentinel. Accept either a top-level
-    # constant on the source_ingest package or on the pinmux module — do
-    # not overconstrain where the implementer puts it.
+    # constant on the source_ingest package or on the pinmux/models
+    # module — do not overconstrain where the implementer puts it.
     sentinel: Any = None
     for modpath in (
         "orchestrator.source_ingest",
@@ -341,50 +347,23 @@ def test_src_a_3_underivable_pinmux_marks_source_unresolved() -> None:
 
     result = derive_pinmux_from_dt(_dt_underivable())
 
-    # The contract can be satisfied by (a) returning the sentinel itself,
-    # (b) returning a list whose single entry equals/carries the sentinel,
-    # or (c) a dict wrapping a `state`/`marker` field. Support all three
-    # so the test doesn't dictate the return-shape decision.
-    def _contains_sentinel(obj: Any) -> bool:
-        if obj is sentinel or obj == sentinel:
-            return True
-        if isinstance(obj, str) and obj == "SOURCE_UNRESOLVED":
-            return True
-        if isinstance(obj, (list, tuple)):
-            return any(_contains_sentinel(x) for x in obj)
-        if isinstance(obj, dict):
-            for v in obj.values():
-                if _contains_sentinel(v):
-                    return True
-            for k in ("marker", "state", "reason", "status"):
-                v = obj.get(k)
-                if v is sentinel or v == sentinel or v == "SOURCE_UNRESOLVED":
-                    return True
-        if hasattr(obj, "marker"):
-            v = getattr(obj, "marker")
-            if v is sentinel or v == sentinel or v == "SOURCE_UNRESOLVED":
-                return True
-        return False
-
-    # Non-empty-or-sentinel: `[]` alone is a §5 violation.
-    is_silent_empty = (
-        isinstance(result, (list, tuple)) and len(result) == 0
-    ) or (isinstance(result, dict) and not result) or result is None
-    assert not is_silent_empty, (
-        "T-SRC-A-3: derive_pinmux_from_dt on an underivable DT returned a "
-        f"silent empty value ({result!r}). This is the exact §5 evidence-"
-        "doctrine violation SOURCE_UNRESOLVED is meant to replace. The "
-        "ingestion path must fail loudly, not silently."
-    )
-
-    assert _contains_sentinel(result), (
+    # Design B: identity is the ONLY correct predicate. A ``list``,
+    # ``str``, ``dict``, or any other payload that happens to equal
+    # or shadow the sentinel is NOT the sentinel and MUST fail this
+    # test. Guarding on ``is`` here is what forces every caller to
+    # spell the identity check too — the reason Design B beats a
+    # ``str`` subclass.
+    assert result is sentinel, (
         f"T-SRC-A-3: derive_pinmux_from_dt on an underivable DT returned "
-        f"{result!r}, which does not carry the SOURCE_UNRESOLVED sentinel "
-        "anywhere reachable. The marker must be a first-class value the "
-        "downstream reader (track_t1 / is_open / report renderer) can "
-        "recognise; a plain empty result is not acceptable."
+        f"{result!r} (type {type(result).__name__}), not the "
+        "SOURCE_UNRESOLVED singleton. Design B contract: identity, not "
+        "equality — `result is SOURCE_UNRESOLVED` MUST hold. A silent "
+        "empty list, an equality-only shim, or an isinstance-only "
+        "surrogate all fail here, and correctly so — the §5 evidence-"
+        "doctrine 'never silent empty, never fabricated guess' rule is "
+        "enforced by identity."
     )
-    print(f"PASS: T-SRC-A-3 underivable DT → SOURCE_UNRESOLVED marker in {type(result).__name__}")
+    print(f"PASS: T-SRC-A-3 underivable DT → SOURCE_UNRESOLVED singleton (identity)")
 
 
 # ── T-SRC-A-4: determinism — two runs → byte-identical pinmux ───────────────

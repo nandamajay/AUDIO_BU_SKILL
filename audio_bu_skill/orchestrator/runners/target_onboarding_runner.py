@@ -29,6 +29,11 @@ from orchestrator.runners.kernel_history_discovery import discover_kernel_histor
 from orchestrator.runners.pin_crosscheck import cross_check_pins
 from orchestrator.runners.power_model_inspection import find_target_rpmhpd_compatible, inspect_power_model_source
 from orchestrator.runners.source_intake_runner import discover_evidence
+from orchestrator.source_ingest import (
+    SOURCE_UNRESOLVED,
+    derive_pinmux_from_dt,
+    sentinel_to_json_literal,
+)
 
 # Evidence-source default carried into every generated case (v1.0 default).
 _DEFAULT_EVIDENCE_SOURCE = "ipcat_first"
@@ -618,6 +623,35 @@ def _build_audio_topology(
         "power_model": {**pm, "inspection_hint": power_model_hint},
         "missing_evidence": analysis.get("missing_evidence") or [],
     }
+    # WP-SRC-A1 commit D: thread derived pinmux facts through
+    # ``audio_topology.pinmux``. Reuses the DT already carried by
+    # ``analysis`` (T-SRC-A-2 fixture shape: ``analysis["dt"]``); does NOT
+    # re-parse. ``derive_pinmux_from_dt`` returns either a non-empty list
+    # of ``PinmuxFact`` or the ``SOURCE_UNRESOLVED`` bare-singleton
+    # sentinel (Design B) when the DT yields nothing derivable — §5
+    # evidence doctrine "never silent empty, never fabricated guess".
+    #
+    # JSON boundary conversion: the sentinel is a bare ``object()``, not
+    # a ``str`` subclass, so ``json.dumps`` cannot serialise it natively.
+    # ``sentinel_to_json_literal`` swaps the singleton for the literal
+    # string ``"SOURCE_UNRESOLVED"`` at this boundary — the ONLY JSON
+    # boundary the sentinel currently crosses. Downstream consumer
+    # ``main._crossverify_source_facts`` then sees either a real list of
+    # pinmux dicts or the literal string; a string is truthy-but-not-list,
+    # so its ``t1 = topology.get("pinmux") or audio_pins`` short-circuit
+    # naturally falls through to the ``audio_pins`` fallback without a
+    # dedicated isinstance guard.
+    #
+    # NOTE: nothing currently populates ``analysis["dt"]`` in the real
+    # runner path (G-3A.9 / WP-SRC-A2). Until DT plumbing lands, this
+    # branch always emits ``"SOURCE_UNRESOLVED"`` on real targets; the
+    # T-SRC-A-5 integration test exercises the list branch via a fixture
+    # DT.
+    pinmux_result = derive_pinmux_from_dt(analysis.get("dt") or {})
+    if pinmux_result is SOURCE_UNRESOLVED:
+        topology["pinmux"] = sentinel_to_json_literal(pinmux_result)
+    else:
+        topology["pinmux"] = [f.to_dict() for f in pinmux_result]
     if pin_crosschecks:
         topology["pin_crosschecks"] = pin_crosschecks
     if ipcat_findings:
