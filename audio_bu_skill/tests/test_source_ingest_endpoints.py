@@ -12,12 +12,12 @@ WP-SRC-B; docs/PHASE3_KNOWN_GAPS.md G-3A.7 T4a half):
   * T-SRC-B-1: ``derive_endpoints_from_ipcat(analysis)`` exists in
     ``orchestrator.source_ingest.endpoints`` and returns a non-empty
     ``list[EndpointFact]`` on a QUP-populated analysis fixture.
-    Red today because the module does not exist.
+    GREEN since the producer landed at 3fde67b.
   * T-SRC-B-2: **SEPARATOR RECONCILE.** Populated endpoints must
     produce a ``track_t4a`` row whose ``subject`` STARTS WITH
     ``"qup."`` (dot separator) — NOT ``"qup:"`` (colon). The full
     key ``"T4a." + subject`` must be lookupable in the
-    ``VerificationGate.rows_by_track_subject`` dict AND
+    ``TrustedFacts.rows_by_track_subject`` dict AND
     ``gate.is_open("T4a", subject)`` must return ``True``. This is
     the direct assertion that the current producer↔gate mismatch
     (``crossverify.py:1743-1754`` emits colon; ``machine_driver.py:229``
@@ -34,12 +34,12 @@ WP-SRC-B; docs/PHASE3_KNOWN_GAPS.md G-3A.7 T4a half):
   * T-SRC-B-4: underivable / empty endpoints input →
     ``derive_endpoints_from_ipcat`` returns the
     ``SOURCE_UNRESOLVED`` bare-singleton sentinel — same Design B
-    contract as WP-SRC-A1. Red today: module does not exist.
+    contract as WP-SRC-A1. GREEN since the producer landed at 3fde67b.
   * T-SRC-B-5: determinism — two invocations of
     ``derive_endpoints_from_ipcat`` on the same analysis fixture
     produce byte-identical dicts under
     ``json.dumps(..., sort_keys=True)``. Mirrors T-SRC-A-4 /
-    T-SRC-A2-4 discipline. Red today: module does not exist.
+    T-SRC-A2-4 discipline. GREEN since the producer landed at 3fde67b.
 
 Failure discipline (§5a): each test guards its import in
 ``try / except ImportError`` and raises ``AssertionError`` naming
@@ -226,10 +226,10 @@ class TestT4aSeparatorReconcile(unittest.TestCase):
             ) from exc
 
         try:
-            from orchestrator.generation.model import VerificationGate
+            from orchestrator.generation.model import TrustedFacts
         except ImportError as exc:
             raise AssertionError(
-                "T-SRC-B-2: prerequisite import of `VerificationGate` from "
+                "T-SRC-B-2: prerequisite import of `TrustedFacts` from "
                 "`orchestrator.generation.model` failed — the gate needs "
                 f"to exist so `is_open` can be exercised. ImportError: {exc}"
             ) from exc
@@ -279,7 +279,7 @@ class TestT4aSeparatorReconcile(unittest.TestCase):
                 )
             rows_by_key[f"T4a.{subject}"] = row
 
-        gate = VerificationGate(rows_by_track_subject=rows_by_key)
+        gate = TrustedFacts(rows_by_track_subject=rows_by_key)
         any_open = False
         for full_key in rows_by_key:
             subject = full_key[len("T4a."):]
@@ -316,10 +316,12 @@ class TestJointFlipMachineDriverAndCodecStub(unittest.TestCase):
             ) from exc
 
         try:
-            from orchestrator.generation.machine_driver import (
+            from orchestrator.runners.machine_driver_generation_runner import (
                 run_machine_driver_generation,
             )
-            from orchestrator.generation.codec_stub import run_codec_stub_generation
+            from orchestrator.runners.codec_generation_runner import (
+                run_codec_stub_generation,
+            )
         except ImportError as exc:
             raise AssertionError(
                 "T-SRC-B-3: prerequisite import of `run_machine_driver_generation` "
