@@ -675,3 +675,99 @@ finding.
 - G-3A.7 Status block (this gap is the T4a half of the empty-source-side
   root cause; A2 closed the T1 half, this closes the T4a half).
 
+
+## G-3A.12 — T4b producer/consumer subject-prefix mismatch (BLOCKS north-star flip)
+
+### Title
+
+T4b codec-binding subject (`<codec><->{controller}`) never matches the
+`T4b.codec.` gate prefix — the live producer can never open the codec gate.
+
+### Discovered
+
+2026-07-24, during WP-SRC-B1 B-3 (3a) investigation while driving the
+production cross-verify seam over the real-Nord joint-flip fixture. Surfaced
+by attempting to open both generators from `track_t4b` output rather than a
+hand-authored `TrustedFacts` fixture.
+
+### Problem
+
+The T4b producer `_t4b_row` (`orchestrator/reasoning/crossverify.py`) emits
+`subject = f"{codec}<->{controller}"`, so `project_facts` keys the row as
+`"T4b.<codec><->{controller}"` (e.g. `T4b.ti,pcm1681<->i2s8`).
+
+Both generators scan a *literal* prefix `"T4b.codec."`:
+
+- `orchestrator/generation/machine_driver.py:240`
+  — `codec_rows = _rows_with_prefix(facts, "T4b.codec.")` (Gate 3a
+  disagreement scan + Gate 3b advisory-open requirement, `:252-258`).
+- `orchestrator/generation/codec_stub.py:230`
+  — same `_rows_with_prefix(facts, "T4b.codec.")` (Gate 3, `:250-256`).
+
+`"T4b.<codec><->{controller}".startswith("T4b.codec.")` → **False** for every
+real codec value. Therefore the **live `track_t4b` producer can NEVER open the
+`T4b.codec.*` gate on a real codec value.** The only `T4b.codec.*` keys in the
+entire repo are hand-authored:
+
+- `tests/fixtures/phase2b/nord_trusted_facts.json:132,152`
+  (`subject: "codec.adau1979"`, `"codec.pcm1681"`).
+- `tests/test_generation_machine.py` `_clean_nord_facts()` inline
+  `_row("T4b", "codec.adau1979", ...)`.
+
+No producer emits `codec.<part>` subjects. The mismatch is masked in
+production ONLY because the un-provisioned Nord returns an empty snapshot, so
+the T1 / T4a gates skip *first* (`authority_not_in_snapshot`) and control never
+reaches the T4b gate. A populated snapshot (real IPCAT after WP-SRC-B2, or the
+joint-flip test fixture) surfaces it immediately: T1 + T4a open, then both
+generators skip on `T4b.codec.*` with `authority_not_in_snapshot`.
+
+### Impact — CRITICAL
+
+`machine_driver` AND `codec_stub` both hard-gate on a `T4b.codec.*`
+advisory-open row. WP-SRC-B2 (real IPCAT QUP plumbing) fills the T1 + T4a
+authority but does **nothing** for T4b. Therefore **A1 + A2 + B1 + B2 alone do
+NOT flip the north-star scorecard 1/4 → 3/4** — the plan's §5 claim is
+incorrect. The T4b subject reconcile is a **HARD PREREQUISITE** for the flip:
+without it, both generators skip on `T4b.codec.*` even with fully populated
+T1 + T4a authority.
+
+### Resolution
+
+Reconcile `_t4b_row`'s `<->` subject with the `T4b.codec.` gate prefix — one
+of:
+
+- **producer-side:** `_t4b_row` emits `subject = f"codec.{part}"` (drop / move
+  the `<->{controller}` into a field), OR
+- **consumer-side:** both gates scan the `<->` shape (accept
+  `T4b.<codec><->` as the codec-row prefix).
+
+This is a producer/consumer contract change touching
+`orchestrator/reasoning/crossverify.py` **and** both generators
+(`machine_driver.py`, `codec_stub.py`), plus the hand-authored fixtures that
+encode the current `codec.` shape. It is its own commit / WP. Estimated 1–2
+days.
+
+### Status
+
+**OPEN.** Blocks the WP-SRC scorecard flip. Must land **before or with**
+WP-SRC-B2 — A1 + A2 + B1 + B2 do not flip the scorecard without it.
+
+### Cross-references
+
+- `audio_bu_skill/orchestrator/reasoning/crossverify.py` `_t4b_row`
+  (`subject = f"{codec}<->{controller}"`, the producer).
+- `audio_bu_skill/orchestrator/generation/machine_driver.py:240,252-258`
+  (Gate 3a / 3b `_rows_with_prefix(facts, "T4b.codec.")`).
+- `audio_bu_skill/orchestrator/generation/codec_stub.py:230,250-256`
+  (Gate 3 `_rows_with_prefix(facts, "T4b.codec.")`).
+- `audio_bu_skill/tests/fixtures/phase2b/nord_trusted_facts.json:132,152`
+  and `tests/test_generation_machine.py` `_clean_nord_facts()` (the only
+  `T4b.codec.*` keys — hand-authored, no producer emits them).
+- `audio_bu_skill/tests/test_source_ingest_endpoints.py`
+  `TestJointFlipMachineDriverAndCodecStub` (B-3, 3b form — proves T1 + T4a
+  open via the live seam, deliberately does NOT call the generators because
+  the T4b gate is unreachable pending this reconcile).
+- G-3A.7 / G-3A.11 (empty-source-side root cause; those close the T1 + T4a
+  halves. G-3A.12 is the *third* gate — the codec-binding half — which no
+  WP-SRC-A/B item addresses).
+
