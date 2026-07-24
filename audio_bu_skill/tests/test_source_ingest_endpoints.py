@@ -121,35 +121,56 @@ def _qup_populated_analysis() -> dict[str, Any]:
 
 
 def _joint_flip_profile() -> dict[str, Any]:
-    """Return a synthetic profile carrying populated pinmux + endpoints + codecs.
+    """Return a profile carrying real-Nord pinmux + endpoints + codecs.
 
     Used by T-SRC-B-3 to exercise the two joint-flip generators
-    (``machine_driver``, ``codec_stub``) end-to-end. The pinmux entries
-    are the WP-SRC-A1/A2 output shape (``gpio.i2s.<role>``); the
-    endpoints entries are the WP-SRC-B producer output shape and MUST
-    key ``track_t4a`` rows on ``qup.<label>`` (dot separator) — the
-    reconciled form the two generators' gates scan for.
+    (``machine_driver``, ``codec_stub``) end-to-end. Every value is
+    traceable to a real Nord IQ-10 evidence file — this is NOT a
+    synthetic fixture.
 
-    The ``codecs`` list carries the real Nord IQ-10 codec pair
-    (``ti,pcm1681`` playback + ``adi,adau1979`` capture, both on LPASS
-    I2S8 — see ``targets/nord-iq10/profile.json``). Both generators
+    **pinmux — real LPASS I2S8 pins.** The WP-SRC-A1/A2 output shape is
+    ``gpio.i2s.<role>``; the runner keys each row on ``role`` so Gate 1
+    scans ``T1.gpio.i2s.<role>``. The three pins are the real Nord I2S8
+    (schematic ``AUD_INTFC8``) assignments confirmed in
+    ``targets/nord-iq10/evidence/ipcat/gpio_list_tlmm_gpios.json`` and
+    ``profile.json.baseline:112`` ("GPIO73/74/75 = BCLK/WS/DATA0"):
+
+      * pin 73, function 2, role ``sclk``  (``aud_intfc8_clk`` / BCLK);
+      * pin 74, function 2, role ``ws``    (``aud_intfc8_ws``);
+      * pin 75, function 2, role ``data0`` (``aud_intfc8_data0``).
+
+    There is deliberately **NO ``mclk`` line** — the real capture
+    exposes three I2S8 pins (clk/ws/data0), not four. Inventing an MCLK
+    pin would be fabrication; the earlier fixture's four-pin
+    ``147..150`` shape was wrong on both count and identity (pins
+    147-150 at function 1 are ``qup2_se2_*`` QUP lines in the real
+    capture, and the real I2S8 function is 2, not 1).
+
+    The design ``name`` (``gpio.i2s.<role>``) will never equal the
+    authority ``name`` (``aud_intfc8_*``), so each row lands
+    **PARTIAL_MATCH** on an exact ``(pin, function)`` hit — same pin,
+    same function, real silicon, canonical name differs by construction.
+    PARTIAL_MATCH opens Gate 1 (``warning=False`` default). No MATCH is
+    claimed or required.
+
+    **endpoints — WP-SRC-B producer shape** (``qup.<label>``, dot
+    separator), the reconciled form both generators' T4a gates scan for.
+
+    **codecs — real Nord IQ-10 pair.** ``ti,pcm1681`` playback +
+    ``adi,adau1979`` capture, both on LPASS I2S8
+    (``targets/nord-iq10/profile.json:95,103``). Both generators
     hard-gate on a T4b advisory-open codec row (``machine_driver.py``
     Gate 3b, ``codec_stub.py`` Gate 3): ``track_t4b`` emits one
-    NCC(authority_out_of_scope) row per codec binding, and that row is
-    advisory-open by §3.7. Without a codec source both gates close on
-    ``authority_not_in_snapshot`` and the joint flip cannot complete —
-    so the profile must declare its codec bindings, exactly as a real
-    ``--onboard`` generated-case does. This is NOT fabrication: the
-    Nord audio design carries these two codecs; the earlier fixture
-    simply omitted the source section the T4b track reads.
+    NCC(authority_out_of_scope) row per codec binding, advisory-open by
+    §3.7. Without a codec source both gates close on
+    ``authority_not_in_snapshot``.
     """
     return {
         "audio_topology": {
             "pinmux": [
-                {"name": "gpio.i2s.mclk", "pin": 147, "function": 1, "role": "mclk"},
-                {"name": "gpio.i2s.sclk", "pin": 148, "function": 1, "role": "sclk"},
-                {"name": "gpio.i2s.ws", "pin": 149, "function": 1, "role": "ws"},
-                {"name": "gpio.i2s.data", "pin": 150, "function": 1, "role": "data"},
+                {"name": "gpio.i2s.sclk", "pin": 73, "function": 2, "role": "sclk"},
+                {"name": "gpio.i2s.ws", "pin": 74, "function": 2, "role": "ws"},
+                {"name": "gpio.i2s.data0", "pin": 75, "function": 2, "role": "data0"},
             ],
             "endpoints": [
                 {"name": "qup.qup_0_se5", "kind": "qup", "bus": "i2s", "role": "primary_i2s"},
@@ -159,6 +180,56 @@ def _joint_flip_profile() -> dict[str, Any]:
                 {"codec": "ti,pcm1681", "controller": "i2s8"},
                 {"codec": "adi,adau1979", "controller": "i2s8"},
             ],
+        },
+    }
+
+
+def _independent_gpio_authority_snapshot() -> dict[str, Any]:
+    """Return a snapshot whose TLMM GPIO authority is INDEPENDENT.
+
+    The T1 half of the joint-flip cross-verify (parallel to
+    ``_independent_qup_authority_snapshot`` for T4a). The authority-side
+    rows are the real Nord IQ-10 TLMM capture *dumped* for this silicon
+    — copied **verbatim** from
+    ``targets/nord-iq10/evidence/ipcat/gpio_list_tlmm_gpios.json`` (chip
+    ``nordschleife_2.0`` / map 8240, per that directory's
+    ``gpio_get_gpio_map.json`` header). They are NOT synthesized from
+    ``_joint_flip_profile``'s pinmux at call time — building the T1
+    authority from ``profile.pinmux`` is the banned tautology.
+
+    Independence is genuine and two-sided: these rows carry the IPCAT
+    field vocabulary (``number`` / ``function`` / ``name`` / ``clock`` /
+    ``direction``) and the ``aud_intfc8_*`` silicon names, none of which
+    appear on the design side (which uses ``gpio.i2s.<role>``). ``track_t1``
+    aligns them on ``(pin, function)`` only because they describe the same
+    physical AUD_INTFC8 pads.
+
+    Deliberately a *superset*: ``aud_intfc8_data1`` (pin 76) has no
+    design-side pinmux entry, proving the authority was authored on its
+    own terms (the real capture lists all four I2S8 data-capable pads)
+    rather than mirrored from the three-pin design claim.
+
+    Exposed via ``gpio_list_tlmm_gpios`` (the T1 fallback authority —
+    ``_t1_authority_available`` needs only ``status == "ok"`` there),
+    which yields ``origin=fallback`` / ``confidence=medium`` rows.
+    is_open is confidence-agnostic, so a fallback PARTIAL_MATCH opens.
+    """
+    return {
+        "chip": "nordschleife_2.0",
+        "tools": {
+            "gpio_list_tlmm_gpios": {
+                "status": "ok",
+                "payload": [
+                    {"number": 73, "function": 2, "name": "aud_intfc8_clk",
+                     "clock": True, "direction": "L"},
+                    {"number": 74, "function": 2, "name": "aud_intfc8_ws",
+                     "clock": False, "direction": "L"},
+                    {"number": 75, "function": 2, "name": "aud_intfc8_data0",
+                     "clock": False, "direction": "L"},
+                    {"number": 76, "function": 2, "name": "aud_intfc8_data1",
+                     "clock": False, "direction": "L"},
+                ],
+            },
         },
     }
 
