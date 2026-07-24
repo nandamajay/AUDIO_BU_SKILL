@@ -23,14 +23,21 @@ WP-SRC-B; docs/PHASE3_KNOWN_GAPS.md G-3A.7 T4a half):
     (``crossverify.py:1743-1754`` emits colon; ``machine_driver.py:229``
     and ``codec_stub.py:214`` scan the dot prefix) is resolved.
     Red today because the producer still emits colon form.
-  * T-SRC-B-3: **JOINT FLIP integration.** On a fixture profile
-    carrying populated ``audio_topology.pinmux`` (WP-SRC-A1/A2
+  * T-SRC-B-3: **JOINT T1+T4a GATE OPEN (3b form).** On a fixture
+    profile carrying populated ``audio_topology.pinmux`` (WP-SRC-A1/A2
     output) AND populated ``audio_topology.endpoints`` AND the
-    separator reconciled, both the ``machine_driver`` and
-    ``codec_stub`` generators must report OPEN gates (no
-    ``GeneratorSkipped`` on ``T4a.qup.*``). Red today because
-    endpoints are absent AND the producer emits colon-form
-    subjects.
+    separator reconciled, the production cross-verify seam
+    (``track_t1`` / ``track_t4a`` → ``project_facts``) must yield
+    ``is_open() == True`` for both the ``T1.gpio.i2s.*`` and
+    ``T4a.qup.*`` gate prefixes — each cross-verified against an
+    INDEPENDENT IPCAT authority snapshot. This does NOT call
+    ``generate_machine_driver`` / ``generate_codec_stub``: both also
+    hard-gate on ``T4b.codec.*``, which the LIVE ``track_t4b``
+    producer can never open (subject is ``"<codec><->{controller}"``,
+    not ``codec.<part>``) — a SEPARATE defect, ``G-3A.12``, that
+    WP-SRC-B1 does not own. Actual generator emission is proven by the
+    real-Nord smoke after WP-SRC-B2 + the T4b reconcile (G-3A.12), NOT
+    by this fixture.
   * T-SRC-B-4: underivable / empty endpoints input →
     ``derive_endpoints_from_ipcat`` returns the
     ``SOURCE_UNRESOLVED`` bare-singleton sentinel — same Design B
@@ -436,9 +443,40 @@ class TestT4aSeparatorReconcile(unittest.TestCase):
 
 
 class TestJointFlipMachineDriverAndCodecStub(unittest.TestCase):
-    """T-SRC-B-3: A1+A2+B fixture flips both joint-triple generators."""
+    """T-SRC-B-3 (3b): the A1+A2+B fixture opens the T1 AND T4a gates.
 
-    def test_both_generators_open_on_joint_fixture(self) -> None:
+    SCOPE — this is the *3b* form. It proves, via the production
+    cross-verify seam (``track_t1`` / ``track_t4a`` → ``project_facts``),
+    that populated pinmux + populated QUP endpoints (WP-SRC-A1/A2 output
+    shape) — each cross-verified against an INDEPENDENT IPCAT authority
+    snapshot — yield ``TrustedFacts.is_open() == True`` for both the
+    ``T1.gpio.i2s.*`` and ``T4a.qup.*`` gate prefixes. Authority arrives
+    ONLY via ``snapshot=`` to the ``track_*`` producers (no
+    ``analysis["ipcat"]`` side-channel, no runner bridge, no NullEngine
+    lane).
+
+    WHY THIS DOES NOT CALL ``generate_machine_driver`` /
+    ``generate_codec_stub``: both generators additionally hard-gate on a
+    ``T4b.codec.*`` advisory-open row (``machine_driver.py`` Gate 3b,
+    ``codec_stub.py`` Gate 3). The LIVE ``track_t4b`` producer
+    (``crossverify.py`` ``_t4b_row``) emits subject
+    ``"<codec><->{controller}"`` → key ``"T4b.<codec><->{controller}"``,
+    which does NOT ``startswith("T4b.codec.")``. Proven this turn: the
+    live ``track_t4b`` producer can NEVER open the ``T4b.codec.*`` gate on
+    a real codec value — only hand-authored fixtures
+    (``nord_trusted_facts.json``, ``_clean_nord_facts``) carry
+    ``T4b.codec.*`` keys. A ``generate_*`` call here would therefore skip
+    on ``T4b.codec.*`` — a SEPARATE defect (G-3A.12) that WP-SRC-B1 does
+    NOT own. Asserting ``GeneratedArtifact`` would require fabricating a
+    ``codec.``-prefixed codec value: the banned tautology.
+
+    ACTUAL generator emission — the "both generators emit" north-star —
+    is proven by the real-Nord smoke after WP-SRC-B2 (real IPCAT QUP
+    authority plumbing) AND the T4b subject reconcile (G-3A.12), NOT by
+    this fixture. See ``docs/PHASE3_KNOWN_GAPS.md`` G-3A.12.
+    """
+
+    def test_joint_fixture_opens_t1_and_t4a_gates(self) -> None:
         try:
             from orchestrator.source_ingest.endpoints import (  # type: ignore[attr-defined]
                 derive_endpoints_from_ipcat,
@@ -451,62 +489,90 @@ class TestJointFlipMachineDriverAndCodecStub(unittest.TestCase):
             ) from exc
 
         try:
-            from orchestrator.runners.machine_driver_generation_runner import (
-                run_machine_driver_generation,
-            )
-            from orchestrator.runners.codec_generation_runner import (
-                run_codec_stub_generation,
-            )
+            from orchestrator.reasoning.crossverify import track_t1, track_t4a
         except ImportError as exc:
             raise AssertionError(
-                "T-SRC-B-3: prerequisite import of `run_machine_driver_generation` "
-                "and/or `run_codec_stub_generation` failed — the joint-flip "
-                "generators must exist for the north-star scorecard delta to "
-                f"be assertable. ImportError: {exc}"
+                "T-SRC-B-3: prerequisite import of `track_t1` / `track_t4a` "
+                "from `orchestrator.reasoning.crossverify` failed — the "
+                "production cross-verify producers must exist for the joint "
+                f"gate assertion to be meaningful. ImportError: {exc}"
+            ) from exc
+
+        try:
+            from orchestrator.generation.facts import project_facts
+        except ImportError as exc:
+            raise AssertionError(
+                "T-SRC-B-3: prerequisite import of `project_facts` from "
+                "`orchestrator.generation.facts` failed — the production "
+                "rows→TrustedFacts projection must exist so `is_open` can "
+                f"be exercised over the joint fixture. ImportError: {exc}"
             ) from exc
 
         profile = _joint_flip_profile()
         analysis = _qup_populated_analysis()
-        # Cross-verify plumbing: the joint-flip fixture MUST expose the
-        # separator-reconciled endpoints via the producer under test so
-        # both generators see the same `T4a.qup.<label>` MATCH rows. If
-        # the producer still emits colon form the join is a no-op and
-        # this test fails at the gate assertions below — that failure is
-        # T-SRC-B-3's red state at HEAD.
-        _ = derive_endpoints_from_ipcat(analysis)
 
-        try:
-            md_result = run_machine_driver_generation(profile=profile, analysis=analysis)
-        except TypeError as exc:
-            raise AssertionError(
-                "T-SRC-B-3: `run_machine_driver_generation` signature "
-                "must accept `profile` and `analysis` kwargs so the "
-                "joint-flip fixture can be exercised end-to-end. "
-                f"TypeError: {exc}"
-            ) from exc
-        try:
-            cs_result = run_codec_stub_generation(profile=profile, analysis=analysis)
-        except TypeError as exc:
-            raise AssertionError(
-                "T-SRC-B-3: `run_codec_stub_generation` signature must "
-                "accept `profile` and `analysis` kwargs so the joint-flip "
-                f"fixture can be exercised end-to-end. TypeError: {exc}"
-            ) from exc
+        # ── T1 half: populated pinmux vs INDEPENDENT TLMM authority ─────────
+        # Authority arrives only via `snapshot=`; the design-side pinmux
+        # (`gpio.i2s.<role>` names) is the `source=`. `track_t1` aligns them
+        # on (pin, function). Building the authority from `profile.pinmux`
+        # would be the banned tautology — `_independent_gpio_authority_
+        # snapshot` is a verbatim Nord IQ-10 TLMM capture instead.
+        t1_rows = track_t1(
+            snapshot=_independent_gpio_authority_snapshot(),
+            source=profile["audio_topology"]["pinmux"],
+        )
 
-        md_skipped = getattr(md_result, "skipped", None)
-        if md_skipped is not None and md_skipped:
+        # ── T4a half: derived endpoints vs INDEPENDENT QUP authority ────────
+        # The derived endpoint list is the `source`; the authority is a
+        # hand-authored `chipio_get_qups` catalog, NOT the endpoints echoed
+        # back. A MATCH means the reconciled `qup.<label>` (dot) subject
+        # agrees with a genuine second party.
+        endpoints = derive_endpoints_from_ipcat(analysis)
+        t4a_rows = track_t4a(
+            snapshot=_independent_qup_authority_snapshot(),
+            endpoints=endpoints,
+        )
+
+        facts = project_facts(list(t1_rows) + list(t4a_rows))
+        keys = sorted(facts.rows_by_track_subject)
+
+        # ── T1 gate: ≥1 open row under the `T1.gpio.i2s.` prefix ────────────
+        # The producer keys each row as `T1.<name> (GPIO <pin>)`; with
+        # source `name="gpio.i2s.<role>"` the key is e.g.
+        # `T1.gpio.i2s.sclk (GPIO 73)`, which startswith `T1.gpio.i2s.`.
+        # is_open() is True only for MATCH / PARTIAL_MATCH with warning=False.
+        t1_open = [
+            k for k in keys
+            if k.startswith("T1.gpio.i2s.")
+            and facts.is_open("T1", k[len("T1."):])
+        ]
+        if not t1_open:
             raise AssertionError(
-                "T-SRC-B-3: machine_driver generator was SKIPPED on the "
-                "joint-flip fixture — WP-SRC-B did not open the "
-                f"`T4a.qup.*` gate. Skip reason: {md_skipped!r}."
+                "T-SRC-B-3: populated pinmux cross-verified against the "
+                "independent TLMM authority must open ≥1 row under the "
+                "`T1.gpio.i2s.` gate prefix (is_open == True). All were "
+                f"CLOSED. Keys: {keys!r}"
             )
-        cs_skipped = getattr(cs_result, "skipped", None)
-        if cs_skipped is not None and cs_skipped:
+
+        # ── T4a gate: ≥1 open row under the `T4a.qup.` (dot) prefix ─────────
+        t4a_open = [
+            k for k in keys
+            if k.startswith("T4a.qup.")
+            and facts.is_open("T4a", k[len("T4a."):])
+        ]
+        if not t4a_open:
             raise AssertionError(
-                "T-SRC-B-3: codec_stub generator was SKIPPED on the "
-                "joint-flip fixture — WP-SRC-B did not open the "
-                f"`T4a.qup.*` gate. Skip reason: {cs_skipped!r}."
+                "T-SRC-B-3: populated endpoints cross-verified against the "
+                "independent QUP authority must open ≥1 row under the "
+                "`T4a.qup.` gate prefix (is_open == True). All were CLOSED — "
+                f"separator reconcile incomplete. Keys: {keys!r}"
             )
+
+        # Regression guard: no legacy colon-form T4a leak.
+        self.assertFalse(
+            any(k.startswith("T4a.qup:") for k in keys),
+            f"legacy colon-form T4a key must be gone; got {keys!r}",
+        )
 
 
 # ---------------------------------------------------------------------------
