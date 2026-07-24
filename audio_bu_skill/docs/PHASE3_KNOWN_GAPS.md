@@ -676,12 +676,13 @@ finding.
   root cause; A2 closed the T1 half, this closes the T4a half).
 
 
-## G-3A.12 — T4b producer/consumer subject-prefix mismatch (BLOCKS north-star flip)
+## G-3A.12 — T4b producer/consumer subject-prefix mismatch (BLOCKED north-star flip; RESOLVED)
 
 ### Title
 
-T4b codec-binding subject (`<codec><->{controller}`) never matches the
-`T4b.codec.` gate prefix — the live producer can never open the codec gate.
+T4b codec-binding subject (`<codec><->{controller}`) did not match the
+`T4b.codec.` gate prefix — pre-B3 the live producer could never open the codec
+gate. RESOLVED by WP-SRC-B3: `_t4b_row` now emits `codec.<part>`.
 
 ### Discovered
 
@@ -690,11 +691,11 @@ production cross-verify seam over the real-Nord joint-flip fixture. Surfaced
 by attempting to open both generators from `track_t4b` output rather than a
 hand-authored `TrustedFacts` fixture.
 
-### Problem
+### Problem (pre-B3)
 
-The T4b producer `_t4b_row` (`orchestrator/reasoning/crossverify.py`) emits
-`subject = f"{codec}<->{controller}"`, so `project_facts` keys the row as
-`"T4b.<codec><->{controller}"` (e.g. `T4b.ti,pcm1681<->i2s8`).
+Pre-B3, the T4b producer `_t4b_row` (`orchestrator/reasoning/crossverify.py`)
+emitted `subject = f"{codec}<->{controller}"`, so `project_facts` keyed the row
+as `"T4b.<codec><->{controller}"` (e.g. `T4b.ti,pcm1681<->i2s8`).
 
 Both generators scan a *literal* prefix `"T4b.codec."`:
 
@@ -705,69 +706,95 @@ Both generators scan a *literal* prefix `"T4b.codec."`:
   — same `_rows_with_prefix(facts, "T4b.codec.")` (Gate 3, `:250-256`).
 
 `"T4b.<codec><->{controller}".startswith("T4b.codec.")` → **False** for every
-real codec value. Therefore the **live `track_t4b` producer can NEVER open the
-`T4b.codec.*` gate on a real codec value.** The only `T4b.codec.*` keys in the
-entire repo are hand-authored:
+real codec value. Therefore, **pre-B3 the live `track_t4b` producer could never
+open the `T4b.codec.*` gate on a real codec value.** Before B3, the only
+`T4b.codec.*` keys in the entire repo were hand-authored:
 
 - `tests/fixtures/phase2b/nord_trusted_facts.json:132,152`
   (`subject: "codec.adau1979"`, `"codec.pcm1681"`).
 - `tests/test_generation_machine.py` `_clean_nord_facts()` inline
   `_row("T4b", "codec.adau1979", ...)`.
 
-No producer emits `codec.<part>` subjects. The mismatch is masked in
+Pre-B3, no producer emitted `codec.<part>` subjects. The mismatch was masked in
 production ONLY because the un-provisioned Nord returns an empty snapshot, so
 the T1 / T4a gates skip *first* (`authority_not_in_snapshot`) and control never
 reaches the T4b gate. A populated snapshot (real IPCAT after WP-SRC-B2, or the
-joint-flip test fixture) surfaces it immediately: T1 + T4a open, then both
-generators skip on `T4b.codec.*` with `authority_not_in_snapshot`.
+joint-flip test fixture) surfaced it immediately: T1 + T4a open, then both
+generators skipped on `T4b.codec.*` with `authority_not_in_snapshot`.
 
-### Impact — CRITICAL
+### Impact — CRITICAL (pre-B3; now RESOLVED)
 
 `machine_driver` AND `codec_stub` both hard-gate on a `T4b.codec.*`
 advisory-open row. WP-SRC-B2 (real IPCAT QUP plumbing) fills the T1 + T4a
-authority but does **nothing** for T4b. Therefore **A1 + A2 + B1 + B2 alone do
-NOT flip the north-star scorecard 1/4 → 3/4** — the plan's §5 claim is
-incorrect. The T4b subject reconcile is a **HARD PREREQUISITE** for the flip:
-without it, both generators skip on `T4b.codec.*` even with fully populated
-T1 + T4a authority.
+authority but does **nothing** for T4b. Pre-B3, this made the T4b subject
+reconcile a **HARD PREREQUISITE** for the north-star flip: without it, both
+generators skipped on `T4b.codec.*` even with fully populated T1 + T4a
+authority. B3 removed that blocker — the producer now emits `codec.<part>`, so
+the T4b advisory half of both gates opens on real codec values. The remaining
+gate to the 1/4 → 3/4 flip is now solely WP-SRC-B2 (real T4a QUP endpoints);
+see the Status block below.
 
 ### Resolution
 
-Reconcile `_t4b_row`'s `<->` subject with the `T4b.codec.` gate prefix — one
-of:
-
-- **producer-side:** `_t4b_row` emits `subject = f"codec.{part}"` (drop / move
-  the `<->{controller}` into a field), OR
-- **consumer-side:** both gates scan the `<->` shape (accept
-  `T4b.<codec><->` as the codec-row prefix).
-
-This is a producer/consumer contract change touching
-`orchestrator/reasoning/crossverify.py` **and** both generators
-(`machine_driver.py`, `codec_stub.py`), plus the hand-authored fixtures that
-encode the current `codec.` shape. It is its own commit / WP. Estimated 1–2
-days.
+Reconciled producer-side (WP-SRC-B3): `_t4b_row` now emits
+`subject = f"codec.{_t4b_norm_part(codec)}"`, where `_t4b_norm_part` strips the
+leading `vendor,` prefix and lowercases (`ti,pcm1681` → `pcm1681`,
+`adi,adau1979` → `adau1979`, rule b). The row therefore keys as
+`T4b.codec.<part>` and matches the `_rows_with_prefix(facts, "T4b.codec.")`
+scan in both generators. No consumer change was needed; the generator gate
+prefixes are unchanged. The residual `<->` in `crossverify.py` is only in the
+`review_actions` human-message string (`"codec<->controller binding is not
+IPCAT-checkable"`), not in any subject.
 
 ### Status
 
-**OPEN.** Blocks the WP-SRC scorecard flip. Must land **before or with**
-WP-SRC-B2 — A1 + A2 + B1 + B2 do not flip the scorecard without it.
+**CLOSED 2026-07-24** by WP-SRC-B3 (`fcf4268` red baseline, `9aa07ff` green).
+`_t4b_row` now emits `codec.<part>` via `_t4b_norm_part` (rule b). Real-Nord
+verified: driving the live production seam
+(`profile.json` → `_t4b_project_source` → `track_t4b` → `TrustedFacts`), the
+two Nord codec subjects resolve to `codec.pcm1681` and `codec.adau1979`, and
+the T4b advisory half of **both** generator gates opens. The north-star
+scorecard **stays 1/4** on real Nord — B3 does NOT flip it — because
+`machine_driver` still closes on `T4a.qup.*` (Gate 2) and `codec_stub` closes
+on `T4a.qup.*` (Gate 1); both need WP-SRC-B2's real IPCAT QUP endpoints. After
+A2 (T1 pinmux) + B3 (T4b codec), **WP-SRC-B2 alone completes the 1/4 → 3/4
+flip** — there is no fourth hidden gate (see the gate audit below).
+
+Gate audit (2026-07-24, source: `machine_driver.py:217-272`,
+`codec_stub.py:202-256`):
+
+- `machine_driver` — 5 gates: G1 `T1.gpio.i2s.*` require-open (A2 ✓),
+  G2 `T4a.qup.*` require-open (needs B2), G3a `T4b.codec.*` DISAGREE hard-skip
+  (passes when no disagreement — default on Nord NCC rows), G3b `T4b.codec.*`
+  advisory-open require (B3 ✓), G4 `T2.*` DISAGREE hard-skip (passes when no
+  disagreement).
+- `codec_stub` — 3 gates: G1 `T4a.qup.*` require-open (needs B2), G2
+  `T4b.codec.*` DISAGREE hard-skip (passes by default), G3 `T4b.codec.*`
+  advisory-open require (B3 ✓).
+- The only REQUIRE-OPEN gate not yet satisfiable by real authority is
+  `T4a.qup.*` (both generators). T1 is closed by A2; T4b by B3. The two
+  DISAGREE gates (machine_driver G3a/G4, codec_stub G2) are hard-skip-on-
+  disagreement — they pass by default and are not authority-open prerequisites.
+  → **B2 alone completes the flip.**
 
 ### Cross-references
 
-- `audio_bu_skill/orchestrator/reasoning/crossverify.py` `_t4b_row`
-  (`subject = f"{codec}<->{controller}"`, the producer).
+- `audio_bu_skill/orchestrator/reasoning/crossverify.py` `_t4b_row` — post-B3
+  emits `subject = f"codec.{_t4b_norm_part(codec)}"` (pre-B3 it emitted
+  `f"{codec}<->{controller}"`, the defect).
 - `audio_bu_skill/orchestrator/generation/machine_driver.py:240,252-258`
   (Gate 3a / 3b `_rows_with_prefix(facts, "T4b.codec.")`).
 - `audio_bu_skill/orchestrator/generation/codec_stub.py:230,250-256`
   (Gate 3 `_rows_with_prefix(facts, "T4b.codec.")`).
 - `audio_bu_skill/tests/fixtures/phase2b/nord_trusted_facts.json:132,152`
-  and `tests/test_generation_machine.py` `_clean_nord_facts()` (the only
-  `T4b.codec.*` keys — hand-authored, no producer emits them).
+  and `tests/test_generation_machine.py` `_clean_nord_facts()` (hand-authored
+  `T4b.codec.*` keys; pre-B3 these were the only such keys and no producer
+  emitted them — post-B3 `_t4b_row` emits the same `codec.<part>` shape).
 - `audio_bu_skill/tests/test_source_ingest_endpoints.py`
   `TestJointFlipMachineDriverAndCodecStub` (B-3, 3b form — proves T1 + T4a
-  open via the live seam, deliberately does NOT call the generators because
-  the T4b gate is unreachable pending this reconcile).
+  open via the live seam; deliberately does NOT call the generators because,
+  pre-B3, the T4b gate was unreachable — reconciled by B3).
 - G-3A.7 / G-3A.11 (empty-source-side root cause; those close the T1 + T4a
-  halves. G-3A.12 is the *third* gate — the codec-binding half — which no
-  WP-SRC-A/B item addresses).
+  halves. G-3A.12 was the *third* gate — the codec-binding half — closed by
+  WP-SRC-B3).
 

@@ -32,12 +32,12 @@ WP-SRC-B; docs/PHASE3_KNOWN_GAPS.md G-3A.7 T4a half):
     ``T4a.qup.*`` gate prefixes — each cross-verified against an
     INDEPENDENT IPCAT authority snapshot. This does NOT call
     ``generate_machine_driver`` / ``generate_codec_stub``: both also
-    hard-gate on ``T4b.codec.*``, which the LIVE ``track_t4b``
-    producer can never open (subject is ``"<codec><->{controller}"``,
+    hard-gate on ``T4b.codec.*``, which pre-B3 the LIVE ``track_t4b``
+    producer could not open (subject was ``"<codec><->{controller}"``,
     not ``codec.<part>``) — a SEPARATE defect, ``G-3A.12``, that
-    WP-SRC-B1 does not own. Actual generator emission is proven by the
-    real-Nord smoke after WP-SRC-B2 + the T4b reconcile (G-3A.12), NOT
-    by this fixture.
+    WP-SRC-B1 does not own. Reconciled by WP-SRC-B3 (``9aa07ff``):
+    ``_t4b_row`` now emits ``codec.<part>``. Actual generator emission is
+    proven by the real-Nord smoke after WP-SRC-B2, NOT by this fixture.
   * T-SRC-B-4: underivable / empty endpoints input →
     ``derive_endpoints_from_ipcat`` returns the
     ``SOURCE_UNRESOLVED`` bare-singleton sentinel — same Design B
@@ -458,22 +458,23 @@ class TestJointFlipMachineDriverAndCodecStub(unittest.TestCase):
     WHY THIS DOES NOT CALL ``generate_machine_driver`` /
     ``generate_codec_stub``: both generators additionally hard-gate on a
     ``T4b.codec.*`` advisory-open row (``machine_driver.py`` Gate 3b,
-    ``codec_stub.py`` Gate 3). The LIVE ``track_t4b`` producer
-    (``crossverify.py`` ``_t4b_row``) emits subject
+    ``codec_stub.py`` Gate 3). Pre-B3, the LIVE ``track_t4b`` producer
+    (``crossverify.py`` ``_t4b_row``) emitted subject
     ``"<codec><->{controller}"`` → key ``"T4b.<codec><->{controller}"``,
-    which does NOT ``startswith("T4b.codec.")``. Proven this turn: the
-    live ``track_t4b`` producer can NEVER open the ``T4b.codec.*`` gate on
+    which did NOT ``startswith("T4b.codec.")``. That was the defect: the
+    live ``track_t4b`` producer could not open the ``T4b.codec.*`` gate on
     a real codec value — only hand-authored fixtures
-    (``nord_trusted_facts.json``, ``_clean_nord_facts``) carry
-    ``T4b.codec.*`` keys. A ``generate_*`` call here would therefore skip
-    on ``T4b.codec.*`` — a SEPARATE defect (G-3A.12) that WP-SRC-B1 does
-    NOT own. Asserting ``GeneratedArtifact`` would require fabricating a
-    ``codec.``-prefixed codec value: the banned tautology.
+    (``nord_trusted_facts.json``, ``_clean_nord_facts``) carried
+    ``T4b.codec.*`` keys. RECONCILED by WP-SRC-B3 (``9aa07ff``):
+    ``_t4b_row`` now emits ``codec.<part>``, so the live producer opens the
+    gate on real codec values (real Nord → ``codec.pcm1681`` /
+    ``codec.adau1979``). This test still does not call ``generate_*`` —
+    that is WP-SRC-B2's real-Nord smoke, not WP-SRC-B1's fixture scope.
 
     ACTUAL generator emission — the "both generators emit" north-star —
     is proven by the real-Nord smoke after WP-SRC-B2 (real IPCAT QUP
-    authority plumbing) AND the T4b subject reconcile (G-3A.12), NOT by
-    this fixture. See ``docs/PHASE3_KNOWN_GAPS.md`` G-3A.12.
+    authority plumbing); the T4b subject reconcile (G-3A.12) already
+    landed. See ``docs/PHASE3_KNOWN_GAPS.md`` G-3A.12.
     """
 
     def test_joint_fixture_opens_t1_and_t4a_gates(self) -> None:
