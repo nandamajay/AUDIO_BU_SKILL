@@ -798,3 +798,111 @@ Gate audit (2026-07-24, source: `machine_driver.py:217-272`,
   halves. G-3A.12 was the *third* gate — the codec-binding half — closed by
   WP-SRC-B3).
 
+---
+
+## G-3A.13 — Hardcoded Nord literals in nominally target-agnostic generators (generality risk)
+
+**Discovered:** 2026-07-24, generality audit prompted by an "is the skill
+Nord-specific?" review.
+
+### Problem
+
+`generate_machine_driver` is nominally target-agnostic (it takes a
+`TrustedFacts` argument and gates on cross-verify rows), but its identity
+strings are baked module-level Nord constants, not derived from the target
+profile. Confirmed by reading `machine_driver.py`:
+
+- `machine_driver.py:131` — `_SNDCARD_COMPATIBLE = "qcom,nord-iq10-sndcard"`
+- `machine_driver.py:132` — `_SNDCARD_MODEL = "IQ10-EVK"`
+- `machine_driver.py:135` — `_PINCTRL_LABEL = "i2s8_active"`
+
+(The reviewer named lines 282-293 — those are the *emission* sites that
+interpolate these constants; the definitions are at 131/132/135.)
+
+For ANY target passed to `generate_machine_driver`, the emitted sound-card
+node would carry Nord's `compatible` / `model` / `pinctrl` label, because
+these are constants, not `profile`-derived.
+
+### Impact
+
+The skill cannot honestly claim multi-target machine-driver generation until
+these are parameterized from the target's profile (`profile.audio_topology`
+/ case fields). On Eliza (or any non-Nord target) the generated machine
+driver would carry Nord's identity strings — a **silent wrong-output, not a
+crash.** The scorecard would still count the artifact as PRODUCED.
+
+### Scope for close
+
+Parameterize the three constants from the target profile; add a test that
+`generate_machine_driver` on a **non-Nord** fixture emits that target's
+`compatible` / `model` / `pinctrl` label, NOT Nord's.
+
+**Caveat (wider than the one constant named):** the generality audit below
+shows all four generator lanes — not just `machine_driver` — are
+Nord/SA8797P-hardcoded. `machine_driver` is the reviewer's named instance;
+a complete close of the north-star "fresh targets" clause must parameterize
+**every** emitted-literal constant listed below, or explicitly re-scope each
+lane as Nord-only-by-design in its own gap entry. Treat the three constants
+above as the *first* close; the full audit is the true backlog.
+
+### Status
+
+**OPEN.** Not a Phase-3A-scorecard blocker (the scorecard counts whether the
+generator PRODUCES an artifact, not whether the artifact is *target-correct*),
+but a **HARD blocker for the north-star's "fresh targets" clause.** Must
+close before any second target's `machine_driver` output is trusted.
+
+### Generality audit — hardcoded Nord/SA8797P literals in the four generator code paths
+
+Scope: `machine_driver.py`, `codec_stub.py`, `dt_scaffolding.py`,
+`audioreach_topology.py`. **GENERATOR CODE ONLY — test fixtures excluded.**
+Every hit that reaches an emitted artifact string or a target-identity
+constant is listed. Docstring/comment-only mentions are noted separately
+(they mislead a reader about scope but do not corrupt output).
+
+**`machine_driver.py` — emitted-into-artifact constants (output-corrupting):**
+
+- `:131` `_SNDCARD_COMPATIBLE = "qcom,nord-iq10-sndcard"` (emitted at `:290`, `:363`)
+- `:132` `_SNDCARD_MODEL = "IQ10-EVK"` (emitted at `:291`)
+- `:135` `_PINCTRL_LABEL = "i2s8_active"` (emitted at `:283`, `:293`)
+- `:140` `_CPU_DAI_LABEL = "q6apmbedai"` / `:141` `_PLATFORM_DAI_LABEL = "q6apm"` (emitted at `:285`, `:326`, `:330`) — these are AudioReach-generic, not Nord-specific, but are still baked constants (parameterize-or-justify)
+- `:159-175` `_DAI_LINKS` — Nord I2S8 link names (`"I2S8 Playback"`/`"I2S8 Capture"`), codec labels `pcm1681`/`adau1979`, `contributes_subject "dai_link.port_id.i2s8_*"` (emitted through the link loop `:299+`)
+- `:282-284` comment header literally says "Nord IQ-10 … &pcm1681 … &adau1979" (emitted into the artifact's leading `/* */` block — output-visible)
+- `:312-345` FIXME text references `linux-nord/0004-*.patch`, `I2S8`, `i2s8_port_id` (emitted, output-visible)
+- `:359` subject `"sound_card.driver_match.nord_iq10"` (partial-artifact row id)
+- `:378` `path_hint` ends `nord_sound.dtsi`
+
+**`codec_stub.py` — emitted-into-artifact constants (output-corrupting):**
+
+- `:150-152` `_NORD_CODECS` = `{adau1979:(adi,adau1979,0x31,…), pcm1681:(ti,pcm1681,0x4c,…)}` — the codec table (emitted at `:317-318`)
+- `:320`, `:331` emits C symbols `nord_<codec>_info` and FIXME text "not in Nord codec table" (`:330`, `:342`)
+- `:366` `path_hint` ends `nord_codec.c`
+- `:161` `_*` MCLK note references ADAU1979 by name (emitted FIXME)
+- Docstring `:5-70`, `:110-145`, `:310-327` — Nord/SA8797P/`i2c18`/QUP2_SE4 scope prose (comment-only)
+
+**`dt_scaffolding.py` — emitted-into-artifact constants (output-corrupting):**
+
+- `:140` `_ADSP_COMPATIBLE = "qcom,sa8775p-adsp-pas"` / `:141` `_ADSP_FIRMWARE = "qcom/sa8775p/adsp.mbn"` — SA8775P/lemans-family shared image, emitted at `:329+`; donor-firmware risk already tracked by KB rule `t5.donor.firmware.sa8775p`
+- `:283` emits the pinmux state node label `i2s8_active` (Nord I2S8 pin set)
+- `:113-137` pin-set + mux-function constants are Nord `aud_intfc8` names (emitted through the pinmux loop)
+- Module docstring `:9-50` explicitly declares this lane **"intentionally scoped to Nord IQ-10 (SA8797P)"** — this lane is Nord-only *by design*, unlike `machine_driver`
+
+**`audioreach_topology.py` — emitted-into-artifact constants (output-corrupting):**
+
+- `:230` emits `compatible = "qcom,sa8775p-adsp-pas"`
+- `:186-225` the entire emitted comment/FIXME block is Nord/SA8797P-specific: "Nord IQ-10 AudioReach GPR service tree", `nord.dtsi:922`, `linux-nord/0003-*.patch`, `FIXME(sa8797p-audio)` (reg base `0x30000000` vs `0x07000000`, RPMHPD_LCX/LMX-wrong-for-Nord, `qcom,nord-rpmhpd`, `lpass_ag_noc`, `apps_smmu` SIDs) — all output-visible
+- `:369` subject `"audioreach.topology_blob.nord_iq10"`
+- `:388` `path_hint` ends `nord_audioreach.dtsi`
+
+**Audit conclusion:** the Nord-hardcoding is **not** confined to the three
+`machine_driver` constants the reviewer named — it is systemic across all
+four lanes (identity strings, codec tables, ADSP compatible/firmware, pinmux
+labels, subject ids, path hints, and output-visible comment blocks).
+`dt_scaffolding` and `audioreach_topology` are the most Nord-entangled and
+their own docstrings admit Nord-only scope; `machine_driver` and `codec_stub`
+present as target-agnostic but are not. Closing G-3A.13 as literally scoped
+(the three named constants) fixes `machine_driver`'s three identity strings
+only; the "fresh targets" north-star clause is **not** satisfied until the
+remaining lanes are parameterized or each is re-declared Nord-only in its own
+gap entry.
+

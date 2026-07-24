@@ -43,6 +43,39 @@ carry FIXMEs, `needs_review` markers, and OBSERVED_* advisory verdicts are the
 target. Compilation, `dtc` validation, and patch-series human approval (gate #3)
 remain deferred to Phase-3B+.
 
+### Scope correction — what Phase-3A actually proves vs. the "fresh targets" clause (G-3A.13)
+
+The north-star sentence above bundles two claims that Phase-3A does **not** deliver
+together. Be precise about which one this phase closes:
+
+- **Phase-3A proves the PIPELINE is target-generic.** Ingestion → cross-verify →
+  gate-open is driven by the target's `profile` / `TrustedFacts` and carries no
+  baked target identity. A fresh target with real source populates real facts,
+  real facts open real gates, and the gates fire the generators. That mechanism is
+  what the scorecard flip (§5) measures, and it is genuinely target-agnostic.
+
+- **The four GENERATORS currently emit Nord/SA8797P identity** (`G-3A.13`,
+  `PHASE3_KNOWN_GAPS.md`). `machine_driver` bakes `qcom,nord-iq10-sndcard` /
+  `IQ10-EVK` / `i2s8_active` as module constants; `codec_stub` bakes the
+  `_NORD_CODECS` table; `dt_scaffolding` and `audioreach_topology` bake the
+  SA8775P ADSP compatible/firmware and Nord-specific comment/FIXME blocks. None of
+  these are derived from the target profile. **The "fresh targets" clause therefore
+  requires a separate generalization WP (parameterize every emitted identity
+  literal from the profile), which is DEFERRED — it is not part of Phase-3A.**
+
+- **The Phase-3A scorecard counts whether a generator PRODUCES an artifact, NOT
+  whether the artifact is target-correct.** A hypothetical "3/4 on Eliza" means
+  three generators *ran to a GeneratedArtifact verdict* — the emitted files would
+  still carry **Nord** identity strings (`qcom,nord-iq10-sndcard`, `IQ10-EVK`, the
+  `_NORD_CODECS` table, `qcom,sa8775p-adsp-pas`) until `G-3A.13` closes. A green
+  scorecard on a non-Nord target is a **pipeline** result, never proof of
+  target-correct output.
+
+**One-line reconciliation:** Phase-3A closes "the pipeline can reach and fire all
+four generators for any target with real source." It does **not** close "the
+generators emit that target's identity." The latter is `G-3A.13`, deferred to a
+generalization WP.
+
 ### The gating chain the GOAL must break (confirmed by reading code)
 
 Three of the four generators are **hard-gated on open cross-verify rows**, and the
