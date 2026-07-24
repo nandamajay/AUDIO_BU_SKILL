@@ -367,7 +367,7 @@ def test_h_single_codec_binding_is_ncc_out_of_scope() -> None:
     assert len(rows) == 1
     row = rows[0]
     assert row.track == "T4b"
-    assert row.subject == "PCM1681<->aud_intfc0"
+    assert row.subject == "codec.pcm1681"  # WP-SRC-B3: codec.<part> (was PCM1681<->aud_intfc0)
     assert row.verdict == "NOT_CROSS_CHECKABLE"
     assert row.coverage_gap_reason == T4B_OOS_REASON == "authority_out_of_scope"
     assert row.warning is False  # WP7 req 9 — warning=False
@@ -379,7 +379,7 @@ def test_h_single_codec_binding_is_ncc_out_of_scope() -> None:
     action = row.review_actions[0]
     assert "PCM1681" in action and "aud_intfc0" in action
     assert "schematic" in action.lower() and "dai-links" in action.lower()
-    print("PASS: (h) Single T4b binding — PCM1681<->aud_intfc0 → NCC(authority_out_of_scope)")
+    print("PASS: (h) Single T4b binding — codec.pcm1681 → NCC(authority_out_of_scope)")
 
 
 # ── (i) Two bindings → 2 NCCs, deterministic order ───────────────────────────
@@ -396,8 +396,8 @@ def test_i_two_bindings_two_rows_deterministic_order() -> None:
     b = track_t4b(snapshot=snap, source=source, kb=None)
     assert len(a) == 2 and len(b) == 2
     # deterministic order (matches source order)
-    assert a[0].subject == "PCM1681<->aud_intfc0"
-    assert a[1].subject == "ADAU1979<->aud_intfc1"
+    assert a[0].subject == "codec.pcm1681"    # WP-SRC-B3: was PCM1681<->aud_intfc0
+    assert a[1].subject == "codec.adau1979"    # WP-SRC-B3: was ADAU1979<->aud_intfc1
     assert [r.to_dict() for r in a] == [r.to_dict() for r in b]
     for r in a:
         assert r.verdict == "NOT_CROSS_CHECKABLE"
@@ -423,7 +423,7 @@ def test_j_empty_source_yields_no_rows() -> None:
         source={"codecs": [{"codec": "TAS5825M", "controller": "aud_intfc2"}]},
         kb=None,
     )
-    assert len(rows) == 1 and rows[0].subject == "TAS5825M<->aud_intfc2"
+    assert len(rows) == 1 and rows[0].subject == "codec.tas5825m"  # WP-SRC-B3: was TAS5825M<->aud_intfc2
     print("PASS: (j) Empty/None T4b source → [] (wrapper keys accepted)")
 
 
@@ -632,11 +632,15 @@ def test_source_fact_accepts_part_role_alias() -> None:
     rows = track_t4b(snapshot=snap, source=t4b_source)
     assert len(rows) == 3
     subjects = [r.subject for r in rows]
-    assert "TI PCM1681<->DAC (playback, 8-ch)" in subjects
-    assert "WSA883x<->SwrTx" in subjects
-    assert "PrimaryCodec<->PrimaryCtrl" in subjects
+    # WP-SRC-B3: subject is codec.<part> (rule (b): strip leading vendor, then
+    # lowercase; comma-free "TI PCM1681" -> "ti pcm1681", whole-lowercased).
+    assert "codec.ti pcm1681" in subjects       # was TI PCM1681<->DAC (playback, 8-ch)
+    assert "codec.wsa883x" in subjects           # was WSA883x<->SwrTx
+    assert "codec.primarycodec" in subjects      # was PrimaryCodec<->PrimaryCtrl
     for s in subjects:
-        assert "<unknown_codec>" not in s and "<unknown_controller>" not in s, (
+        # The controller left the SUBJECT (WP-SRC-B3); the alias-mapping
+        # reached-the-builder guard now checks the codec half only.
+        assert "<unknown_codec>" not in s, (
             f"alias mapping failed to reach T4b row builder: {s!r}"
         )
     print("PASS: T4b part/role alias mapping — primary keys preferred, aliases fill gaps")

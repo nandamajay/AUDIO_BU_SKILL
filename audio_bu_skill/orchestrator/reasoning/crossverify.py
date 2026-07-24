@@ -23,6 +23,7 @@ verdicts byte-for-byte and is the pipeline's regression anchor.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from orchestrator.reasoning.cardinality import compare_element_counts
@@ -2153,6 +2154,27 @@ def _t4b_flatten_source(source: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _t4b_norm_part(codec: str) -> str:
+    """Normalize a codec compatible to the gate-shaped ``<part>`` identifier.
+
+    WP-SRC-B3 (G-3A.12), normalization rule (b): strip a leading ``vendor,``
+    compatible prefix, then lowercase. Comma-gated — a comma-free value is
+    lowercased WHOLE (never split on spaces / "last token")::
+
+        ti,pcm1681   -> pcm1681
+        adi,adau1979 -> adau1979
+        PCM1681      -> pcm1681
+
+    The result is the ``<part>`` in the gate-shaped subject ``codec.<part>``
+    that both generators scan (``machine_driver.py`` / ``codec_stub.py`` via
+    the ``T4b.codec.`` prefix) and that the authority fixtures already encode
+    (``nord_trusted_facts.json``). Rule (b) matches the live ``vendor,part``
+    shape exactly (``targets/nord-iq10/profile.json``) without guessing at
+    space-separated display forms.
+    """
+    return re.sub(r"^[^,]*,", "", codec).lower()
+
+
 def _t4b_row(binding: dict[str, Any]) -> VerificationRow:
     """Build the single NCC(authority_out_of_scope) row for one codec binding.
 
@@ -2161,10 +2183,15 @@ def _t4b_row(binding: dict[str, Any]) -> VerificationRow:
     NOT_CROSS_CHECKABLE default), authority={strength: UNAVAILABLE,
     origin: "none"}, and citations = ``["kb.rule:t4b.codec_binding.out_of_scope"]``
     ONLY — no IPCAT tool is cited from this track.
+
+    WP-SRC-B3 (G-3A.12): the subject is the gate-shaped ``codec.<part>``
+    (dot-prefix, vendor-stripped, lowercased via ``_t4b_norm_part``) so the
+    LIVE producer can open the ``T4b.codec.`` advisory gate. The controller
+    leaves the SUBJECT but stays on the row (``source`` + ``review_actions``).
     """
     codec = str(binding.get("codec") or "<unknown_codec>")
     controller = str(binding.get("controller") or "<unknown_controller>")
-    subject = f"{codec}<->{controller}"
+    subject = f"codec.{_t4b_norm_part(codec)}"
     return VerificationRow(
         track="T4b",
         subject=subject,

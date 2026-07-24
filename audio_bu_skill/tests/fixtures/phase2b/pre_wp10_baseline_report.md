@@ -325,8 +325,8 @@ Six-track cross-verification between the schematic/design-side facts and the IPC
 | T3 | dsp_subsystem_instance | MATCH | medium |  |
 | T3 | lpass_macro_instance | MATCH | medium |  |
 | T3 | soundwire_master | MATCH | medium |  |
-| T4b | ADI ADAU1979<->ADC (capture, 4-channel) | NOT_CROSS_CHECKABLE | none |  |
-| T4b | TI PCM1681<->DAC (playback, 8-channel) | NOT_CROSS_CHECKABLE | none |  |
+| T4b | codec.adi adau1979 | NOT_CROSS_CHECKABLE | none |  |
+| T4b | codec.ti pcm1681 | NOT_CROSS_CHECKABLE | none |  |
 | T5 | dts.revision_anchor | NOT_CROSS_CHECKABLE | none |  |
 
 
