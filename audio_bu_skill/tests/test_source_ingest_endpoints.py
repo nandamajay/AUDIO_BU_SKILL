@@ -146,6 +146,44 @@ def _joint_flip_profile() -> dict[str, Any]:
     }
 
 
+def _independent_qup_authority_snapshot() -> dict[str, Any]:
+    """Return a snapshot whose ``chipio_get_qups`` authority is INDEPENDENT.
+
+    The honest-unit-test half of T-SRC-B-2 (Option (ii), authorized in
+    the WP-SRC-B commit-2 design review): the authority-side rows are
+    hand-authored as the IPCAT QUP catalog would be *dumped* for this
+    silicon — they are NOT a copy of the derived ``EndpointFact`` list
+    and NOT synthesized from ``_qup_populated_analysis`` at call time.
+    They align with the derived claims on ``engine`` / ``se_number``
+    only because they describe the same physical SEs, so a MATCH here
+    is a genuine two-sided cross-verify — the exact property a
+    runner-composed (``qup_controllers`` echo) authority would destroy.
+
+    Deliberately a *superset*: ``QUPv3_2_SE_0`` has no derived endpoint,
+    proving the authority was authored on its own terms rather than
+    mirrored from the source list. Rows carry only the IPCAT-native
+    fields (``engine`` / ``se_number`` / capability booleans) — none of
+    the endpoint-side ``instance`` / ``bus`` / ``role`` / ``name``
+    labels are echoed across.
+
+    Mirror of ``tests/test_crossverify_t4.py::test_a_qup_match_direct_high``
+    (``_snap(qups=[...])`` as authority + a separate ``source`` claim).
+    """
+    return {
+        "chip": "nordschleife_2.0",
+        "tools": {
+            "chipio_get_qups": {
+                "status": "ok",
+                "payload": [
+                    {"engine": "QUPv3_0_SE_5", "se_number": 5, "i2s": True},
+                    {"engine": "QUPv3_1_SE_2", "se_number": 2, "i2c": True},
+                    {"engine": "QUPv3_2_SE_0", "se_number": 0, "uart": True},
+                ],
+            },
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # T-SRC-B-1: producer exists, returns non-empty list on QUP-populated input
 # ---------------------------------------------------------------------------
@@ -237,15 +275,24 @@ class TestT4aSeparatorReconcile(unittest.TestCase):
         analysis = _qup_populated_analysis()
         endpoints = derive_endpoints_from_ipcat(analysis)
 
+        # Option (ii) two-sided cross-verify: the authority side is an
+        # INDEPENDENT `chipio_get_qups` snapshot (hand-authored IPCAT QUP
+        # catalog for this silicon), NOT the derived endpoint list echoed
+        # back. `track_t4a` reconciles the derived claims (source) against
+        # this authority; a MATCH here means the separator/subject plumbing
+        # agrees with a genuine authority, not a self-confirming copy.
+        authority_snapshot = _independent_qup_authority_snapshot()
+
         try:
-            rows = track_t4a(analysis=analysis, endpoints=endpoints)
+            rows = track_t4a(snapshot=authority_snapshot, endpoints=endpoints)
         except TypeError as exc:
             raise AssertionError(
                 "T-SRC-B-2: `track_t4a` signature must accept the "
                 "WP-SRC-B endpoint list as input (e.g. via an "
                 "`endpoints=` kwarg or an `analysis['audio_topology']"
-                "['endpoints']` lookup). Producer wiring is part of the "
-                f"WP-SRC-B green commit. TypeError: {exc}"
+                "['endpoints']` lookup) alongside the authority `snapshot=`. "
+                "Producer wiring is part of the WP-SRC-B green commit. "
+                f"TypeError: {exc}"
             ) from exc
 
         if not isinstance(rows, list) or not rows:
