@@ -15,6 +15,18 @@ DAI-link.
 
 Nord-family scoping (WP5):
 
+  NOT YET TARGET-AGNOSTIC (G-3A.13). Despite taking a ``TrustedFacts``
+  argument and gating on target-derived cross-verify rows, this lane emits
+  Nord identity from module-level constants (``_SNDCARD_COMPATIBLE`` /
+  ``_SNDCARD_MODEL`` / ``_PINCTRL_LABEL`` at :131/132/135, plus ``_DAI_LINKS``),
+  NOT from the target profile. On any non-Nord target it would emit Nord's
+  ``qcom,nord-iq10-sndcard`` / ``IQ10-EVK`` / ``i2s8_active`` — a silent
+  wrong-output, not a crash. Multi-target correctness requires parameterizing
+  these from the profile (a deferred generalization WP; see
+  ``docs/PHASE3_KNOWN_GAPS.md`` G-3A.13). Until then treat this lane as
+  Nord-parameterized, matching the honest scope admission already carried by
+  ``dt_scaffolding.py:17`` and ``audioreach_topology.py``.
+
   * Sound card node — a NEW root child (``/ { sound { ... }; };``), not a label
     override. Two decisions baked in here (confirmed A/B for Nord IQ-10):
 
