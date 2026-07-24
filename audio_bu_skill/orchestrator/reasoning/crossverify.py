@@ -27,6 +27,7 @@ from typing import Any
 
 from orchestrator.reasoning.cardinality import compare_element_counts
 from orchestrator.reasoning.crossverify_model import VerificationRow
+from orchestrator.source_ingest.models import SOURCE_UNRESOLVED
 
 # WP-C ``compare_element_counts`` returns ``counts`` keyed by
 # :data:`orchestrator.reasoning.cardinality_config.SOURCE_NAME` values
@@ -1798,10 +1799,68 @@ def _t4a_row(
     )
 
 
+def _t4a_resolve_source(
+    source: Any,
+    endpoints: Any,
+    analysis: dict[str, Any] | None,
+) -> Any:
+    """Resolve the design-side claim carrier for :func:`track_t4a`.
+
+    Precedence (first non-``None`` wins): explicit ``source`` → ``endpoints``
+    → ``analysis["audio_topology"]["endpoints"]``. The result is handed
+    verbatim to :func:`_t4a_flatten_source`, so any shape that function
+    already accepts (a list of dicts, or a dict wrapping such a list) passes
+    straight through.
+
+    Coercion rules (additive, guard-neutral):
+
+      * ``SOURCE_UNRESOLVED`` (the WP-SRC-B underivable-input singleton) →
+        ``[]``. An underivable source contributes zero claims; it must never
+        be silently treated as an authority signal or a fabricated claim.
+      * a list whose items expose ``to_dict`` (``EndpointFact`` instances) →
+        a list of their dict forms, so the downstream flatten sees the plain
+        endpoint dicts it expects. Items already dicts pass through unchanged;
+        any other item type is dropped.
+      * anything else (a plain list of dicts, a wrapper dict, ``None``) →
+        returned unchanged for :func:`_t4a_flatten_source` to handle.
+
+    ``analysis`` is consulted ONLY for its declared endpoint list — never
+    reshaped into an authority snapshot. See :func:`track_t4a`'s docstring for
+    the anti-tautology rationale.
+    """
+    chosen: Any = None
+    if source is not None:
+        chosen = source
+    elif endpoints is not None:
+        chosen = endpoints
+    elif isinstance(analysis, dict):
+        topology = analysis.get("audio_topology")
+        if isinstance(topology, dict):
+            chosen = topology.get("endpoints")
+
+    if chosen is SOURCE_UNRESOLVED:
+        return []
+    if isinstance(chosen, list):
+        coerced: list[dict[str, Any]] = []
+        for item in chosen:
+            to_dict = getattr(item, "to_dict", None)
+            if callable(to_dict):
+                as_dict = to_dict()
+                if isinstance(as_dict, dict):
+                    coerced.append(as_dict)
+            elif isinstance(item, dict):
+                coerced.append(item)
+        return coerced
+    return chosen
+
+
 def track_t4a(
     snapshot: dict[str, Any],
-    source: Any,
+    source: Any = None,
     kb: dict[str, Any] | None = None,
+    *,
+    endpoints: Any = None,
+    analysis: dict[str, Any] | None = None,
 ) -> list[VerificationRow]:
     """T4a — SoC Endpoint Validation.
 
@@ -1821,8 +1880,27 @@ def track_t4a(
 
     The KB parameter is reserved for future opt-in overrides and is not
     consulted here (parity with T5).
+
+    Source selection (WP-SRC-B, additive + guard-neutral)
+    -----------------------------------------------------
+    The design-side claim list may be supplied three ways, resolved in this
+    precedence: explicit ``source`` (legacy positional path, unchanged) →
+    ``endpoints`` (a WP-SRC-B ``list[EndpointFact]`` or the
+    ``SOURCE_UNRESOLVED`` singleton) → ``analysis`` (``analysis["audio_topology"]
+    ["endpoints"]`` lookup). ``endpoints`` items exposing a ``to_dict`` are
+    coerced to their dict form; ``SOURCE_UNRESOLVED`` (or any underivable
+    input) coerces to an empty claim list → an empty row list, never a
+    fabricated claim.
+
+    Crucially, the **authority** snapshot is ALWAYS the caller-supplied
+    ``snapshot`` argument. ``analysis`` is consulted ONLY to locate design-side
+    endpoint claims — it is never reshaped into an authority snapshot. A
+    cross-verifier that built its authority from the same payload it verifies
+    would be tautological; this function refuses to do that.
     """
     del kb  # T4a does not consult the KB parameter in this WP
+
+    source = _t4a_resolve_source(source, endpoints, analysis)
 
     claims = _t4a_flatten_source(source)
     if not claims:
