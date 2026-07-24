@@ -121,7 +121,7 @@ def _qup_populated_analysis() -> dict[str, Any]:
 
 
 def _joint_flip_profile() -> dict[str, Any]:
-    """Return a synthetic profile carrying populated pinmux + endpoints.
+    """Return a synthetic profile carrying populated pinmux + endpoints + codecs.
 
     Used by T-SRC-B-3 to exercise the two joint-flip generators
     (``machine_driver``, ``codec_stub``) end-to-end. The pinmux entries
@@ -129,6 +129,19 @@ def _joint_flip_profile() -> dict[str, Any]:
     endpoints entries are the WP-SRC-B producer output shape and MUST
     key ``track_t4a`` rows on ``qup.<label>`` (dot separator) — the
     reconciled form the two generators' gates scan for.
+
+    The ``codecs`` list carries the real Nord IQ-10 codec pair
+    (``ti,pcm1681`` playback + ``adi,adau1979`` capture, both on LPASS
+    I2S8 — see ``targets/nord-iq10/profile.json``). Both generators
+    hard-gate on a T4b advisory-open codec row (``machine_driver.py``
+    Gate 3b, ``codec_stub.py`` Gate 3): ``track_t4b`` emits one
+    NCC(authority_out_of_scope) row per codec binding, and that row is
+    advisory-open by §3.7. Without a codec source both gates close on
+    ``authority_not_in_snapshot`` and the joint flip cannot complete —
+    so the profile must declare its codec bindings, exactly as a real
+    ``--onboard`` generated-case does. This is NOT fabrication: the
+    Nord audio design carries these two codecs; the earlier fixture
+    simply omitted the source section the T4b track reads.
     """
     return {
         "audio_topology": {
@@ -141,6 +154,10 @@ def _joint_flip_profile() -> dict[str, Any]:
             "endpoints": [
                 {"name": "qup.qup_0_se5", "kind": "qup", "bus": "i2s", "role": "primary_i2s"},
                 {"name": "qup.qup_1_se2", "kind": "qup", "bus": "i2c", "role": "codec_control"},
+            ],
+            "codecs": [
+                {"codec": "ti,pcm1681", "controller": "i2s8"},
+                {"codec": "adi,adau1979", "controller": "i2s8"},
             ],
         },
     }
