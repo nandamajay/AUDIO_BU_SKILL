@@ -71,7 +71,7 @@ Explicitly out of scope for this red-baseline commit:
 Run: ``PYTHONPATH=audio_bu_skill python3 -m tests.test_source_ingest_endpoints``
 or ``cd audio_bu_skill && python3 -m pytest tests/test_source_ingest_endpoints.py -v``.
 
-Signed-off-by: Ajay Kumar Nandam <ajayn@qti.qualcomm.com>
+Signed-off-by: Ajay Kumar Nandam <ajay.nandam@oss.qualcomm.com>
 """
 
 from __future__ import annotations
@@ -91,35 +91,61 @@ def _qup_populated_analysis() -> dict[str, Any]:
 
     Shape matches what the WP-SRC-A2 wiring commit's ``analysis`` mapping
     already carries on real ``--onboard`` runs after IPCAT enrichment:
-    an ``ipcat`` section with ``qup_controllers`` listing each SE by
-    instance / engine name and the audio bus it services. The producer
-    under test is expected to walk this shape (or a compatible one it
-    defines) and emit ``EndpointFact`` entries for each I2S/I2C bus
-    endpoint the machine driver must own.
+    an ``ipcat`` section with ``chipio_get_qups`` — the REAL IPCAT tool
+    key — carrying a flat list of SE records. Per entry: a ``swi`` dict
+    (with ``name`` — the engine-format label), ``se_number``, ``group``
+    (``"TLMM"`` / ``"SAIL"``), ``wrapper_id``, ``instance``, and
+    capability booleans (``i2c`` / ``spi`` / ``uart`` / ``i3c``).
+
+    Migrated from the pre-B2 fictional shape (``qup_controllers`` with
+    ``kind``/``engine``/``bus``/``audio_role`` keys) to match the real
+    IPCAT ``chipio_get_qups`` payload (WP-SRC-B2 landing). See
+    ``tests/test_source_ingest_endpoints_b2.py`` for the verbatim
+    real-shape reference.
 
     Two SEs are included so T-SRC-B-1 can assert a non-empty list AND
-    T-SRC-B-2/3 can key on a specific subject.
+    T-SRC-B-2/3 can key on a specific subject:
+
+      * Entry 1 — SE-5 (``QUPv3_0_SE_5``, all caps False): under the
+        migrated reader this derives ``cap=""`` → the cap-agrees rule
+        defaults True and the row lands MATCH via engine alignment
+        against the ``_independent_qup_authority_snapshot`` entry.
+      * Entry 2 — SE-2 (``QUPv3_1_SE_2``, ``i2c=True``): derives
+        ``cap="i2c"`` and matches the authority's ``i2c=True`` on
+        ``QUPv3_1_SE_2`` → MATCH via engine + cap agreement.
+
+    Both rows open the ``T4a.qup.*`` gate for T-SRC-B-3.
     """
     return {
         "ipcat": {
-            "qup_controllers": [
+            "chipio_get_qups": [
                 {
-                    "kind": "qup",
-                    "engine": "QUPv3_0_SE_5",
-                    "instance": "qup_0_se5",
-                    "bus": "i2s",
-                    "audio_role": "primary_i2s",
+                    "swi": {
+                        "address": None,
+                        "map": "ARM_ADDRESS_FILE_SW",
+                        "name": "QUPv3_0_SE_5",
+                    },
                     "se_number": 5,
-                    "group_name": "qup_0",
+                    "group": "TLMM",
+                    "wrapper_id": 0,
+                    "i2c": False,
+                    "spi": False,
+                    "uart": False,
+                    "instance": "qup_0_se5",
                 },
                 {
-                    "kind": "qup",
-                    "engine": "QUPv3_1_SE_2",
-                    "instance": "qup_1_se2",
-                    "bus": "i2c",
-                    "audio_role": "codec_control",
+                    "swi": {
+                        "address": None,
+                        "map": "ARM_ADDRESS_FILE_SW",
+                        "name": "QUPv3_1_SE_2",
+                    },
                     "se_number": 2,
-                    "group_name": "qup_1",
+                    "group": "TLMM",
+                    "wrapper_id": 1,
+                    "i2c": True,
+                    "spi": False,
+                    "uart": False,
+                    "instance": "qup_1_se2",
                 },
             ],
         },
@@ -299,11 +325,14 @@ class TestDeriveEndpointsContract(unittest.TestCase):
                 "-> list[EndpointFact] | SOURCE_UNRESOLVED` in "
                 "`orchestrator.source_ingest.endpoints`. This module does "
                 "not exist yet — WP-SRC-B red baseline. The producer must "
-                "walk `analysis['ipcat']['qup_controllers']` (or a "
-                "compatible shape) and emit one `EndpointFact` per audio "
-                "bus endpoint so `track_t4a` can produce `T4a.qup.<label>` "
-                "MATCH rows on real Nord/Eliza. This closes the T4a half "
-                f"of G-3A.7. ImportError: {exc}"
+                "walk `analysis['ipcat']['chipio_get_qups']` (the real "
+                "IPCAT flat-list shape — per-entry keys `swi` (dict with "
+                "address/map/name), `se_number`, `group`, `wrapper_id`, "
+                "and capability booleans `i2c`/`spi`/`uart`) and emit one "
+                "`EndpointFact` per audio bus endpoint so `track_t4a` "
+                "can produce `T4a.qup.<label>` MATCH rows on real "
+                "Nord/Eliza. This closes the T4a half of G-3A.7. "
+                f"ImportError: {exc}"
             ) from exc
 
         analysis = _qup_populated_analysis()
@@ -608,7 +637,7 @@ class TestDeriveEndpointsUnresolved(unittest.TestCase):
                 f"ImportError: {exc}"
             ) from exc
 
-        for empty in ({}, {"ipcat": {}}, {"ipcat": {"qup_controllers": []}}):
+        for empty in ({}, {"ipcat": {}}, {"ipcat": {"chipio_get_qups": []}}):
             result = derive_endpoints_from_ipcat(empty)
             if result is not SOURCE_UNRESOLVED:
                 raise AssertionError(

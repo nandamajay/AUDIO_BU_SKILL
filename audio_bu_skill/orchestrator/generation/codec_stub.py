@@ -16,6 +16,17 @@ wiring lands in WP5 (machine driver).
 
 Nord-family scoping (WP4):
 
+  NOT YET TARGET-AGNOSTIC (G-3A.13). Despite taking a ``TrustedFacts``
+  argument and gating on target-derived cross-verify rows, this lane emits
+  Nord identity from a module-level constant (``_NORD_CODECS`` at :150-152,
+  the ``adau1979`` / ``pcm1681`` codec table), NOT from the target profile.
+  On any non-Nord target it would emit Nord's codec bindings and ``nord_*``
+  C symbols — a silent wrong-output, not a crash. Multi-target correctness
+  requires parameterizing the codec table from the profile (a deferred
+  generalization WP; see ``docs/PHASE3_KNOWN_GAPS.md`` G-3A.13). Until then
+  treat this lane as Nord-parameterized, matching the honest scope admission
+  already carried by ``dt_scaffolding.py:17`` and ``audioreach_topology.py``.
+
   * Two board codecs on ``&i2c18``:
 
     - ADI ADAU1979 quad-ADC at 7-bit i2c addr ``0x31`` (compatible
