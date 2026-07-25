@@ -18,6 +18,7 @@ It NEVER generates kernel code, compiles, or writes case.py.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from orchestrator.runners.power_model_inspection import find_target_rpmhpd_compa
 from orchestrator.runners.source_intake_runner import discover_evidence
 from orchestrator.source_ingest import (
     SOURCE_UNRESOLVED,
+    derive_endpoints_from_ipcat,
     derive_pinmux_from_dt,
     read_dt_pinctrl,
     sentinel_to_json_literal,
@@ -226,6 +228,39 @@ def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
     # (T-SRC-A2-4) is preserved because we do not mutate ``analysis["dt"]``
     # after this assignment.
     analysis["dt"] = read_dt_pinctrl(str(kernel_source), target_name)
+
+    # WP-SRC-B commit-3 wiring (offline-load): populate
+    # ``analysis["ipcat"]["chipio_get_qups"]`` from the cached IPCAT
+    # evidence file already discovered by ``discover_evidence`` so that
+    # ``_build_audio_topology``'s ``derive_endpoints_from_ipcat`` gate
+    # emits a real endpoint list on real ``--onboard`` runs instead of
+    # ``SOURCE_UNRESOLVED``. Consumer is symmetric to WP-SRC-A2 pinmux.
+    #
+    # HONEST-LABEL / SAME-SOURCE CAVEAT: the T4a authority in
+    # ``track_t4a`` (``crossverify.py:1603/1914``) also reads
+    # ``chipio_get_qups``. Loading the same file for both sides makes
+    # any resulting ``T4a.qup.*`` MATCH a same-source presence signal,
+    # NOT a cross-verified check. This wiring's value is PLUMBING
+    # (populating ``audio_topology['endpoints']`` to unblock
+    # ``machine_driver`` / ``codec_stub`` gate-2). A genuine T4a
+    # design-side source (kernel-DT / patch codec-on-bus references)
+    # is the honest future WP-SRC-C; see docs/PHASE3_KNOWN_GAPS.md
+    # G-3A.11 revision.
+    #
+    # No-op on load failure: FileNotFoundError / JSONDecodeError /
+    # missing file among the evidence set cascade to
+    # ``SOURCE_UNRESOLVED`` via the reader's empty-list / non-dict
+    # guards at ``endpoints.py:277-284``.
+    for _ev_path in evidence_files:
+        if Path(_ev_path).name == "chipio_get_qups.json":
+            try:
+                with open(_ev_path, "r", encoding="utf-8") as _fp:
+                    _qups_payload = json.load(_fp)
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                break
+            if isinstance(_qups_payload, list):
+                analysis.setdefault("ipcat", {})["chipio_get_qups"] = _qups_payload
+            break
 
     # --- 3b. pin cross-check: schematic-derived GPIO/net findings (if QGenie
     # returned any) against the candidate patches' DT GPIO assignments. A
@@ -677,6 +712,24 @@ def _build_audio_topology(
         topology["pinmux"] = sentinel_to_json_literal(pinmux_result)
     else:
         topology["pinmux"] = [f.to_dict() for f in pinmux_result]
+    # WP-SRC-B commit-3 wiring: symmetric endpoints plumbing (identical
+    # sentinel-guard shape to pinmux above). Source is populated by the
+    # offline-load block up top; on load failure or non-Nord targets
+    # without a cached ``chipio_get_qups.json``, the reader returns
+    # ``SOURCE_UNRESOLVED`` and the literal string lands on disk.
+    #
+    # HONEST-LABEL CAVEAT (repeated at the consumer): downstream T4a
+    # authority reads the same ``chipio_get_qups`` catalog, so any
+    # resulting MATCH is a same-source presence signal — not a
+    # cross-verification. This branch's job is to unblock the joint
+    # ``T4a.qup.*`` gate for ``machine_driver`` / ``codec_stub`` by
+    # populating the endpoints list; the real design-side cross-check
+    # is future WP-SRC-C.
+    endpoints_result = derive_endpoints_from_ipcat(analysis)
+    if endpoints_result is SOURCE_UNRESOLVED:
+        topology["endpoints"] = sentinel_to_json_literal(endpoints_result)
+    else:
+        topology["endpoints"] = [f.to_dict() for f in endpoints_result]
     if pin_crosschecks:
         topology["pin_crosschecks"] = pin_crosschecks
     if ipcat_findings:
