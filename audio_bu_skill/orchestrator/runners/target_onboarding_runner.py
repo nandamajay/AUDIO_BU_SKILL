@@ -34,6 +34,7 @@ from orchestrator.source_ingest import (
     SOURCE_UNRESOLVED,
     derive_endpoints_from_ipcat,
     derive_pinmux_from_dt,
+    read_codecs_from_dts,
     read_dt_pinctrl,
     resolve_codec_verdicts,
     sentinel_to_json_literal,
@@ -189,6 +190,59 @@ def resolve_onboarding_task_spec(
     }
 
 
+def _codec_source_marker(codec_source_path: str) -> str:
+    """Return a compact source identifier for the honest-label tag.
+
+    G-3A.9 requires the injected ``analysis["codecs"]`` to trace to a
+    NAMED explicit source at every callsite. The marker is the filename
+    basename (``iq10-evk.dts``); callers wanting a commit-sha inline
+    ("candidate_dts:5267b2e1") pass an already-decorated path — this
+    helper doesn't try to discover commit shas out-of-band.
+    """
+    return Path(codec_source_path).name or str(codec_source_path)
+
+
+def _build_candidate_codecs(codec_source_path: str) -> list[dict[str, Any]]:
+    """Read candidate .dts codec facts and decorate with tag+source.
+
+    WP G-3A.9 (Goal-A observability). The reader
+    (``read_codecs_from_dts``) returns bare codec facts —
+    ``{"label", "compatible", "part"}`` — with no provenance knowledge.
+    This helper stamps each fact with:
+
+      * ``provenance_tag`` — the honest-label caveat:
+        ``codecs=candidate-derived (<source>) NOT independently verified;
+         T4a=same-source NOT cross-verified``
+      * ``source`` — the source marker (see ``_codec_source_marker``).
+
+    Returns an empty list on any of: falsy ``codec_source_path``, missing
+    file, malformed DTS, zero codec nodes matched. The runner interprets
+    ``[]`` as "no candidate source usable" and leaves
+    ``analysis["codecs"]`` unchanged (backwards-compat guarantee).
+
+    Kept as a module-level helper (not a closure) so tests can monkey-
+    patch it to inject malformed decorations and exercise the runner's
+    hard-fail guard — the G-3A.9 correctness contract.
+    """
+    if not codec_source_path:
+        return []
+    codec_facts = read_codecs_from_dts(str(codec_source_path))
+    if not codec_facts:
+        return []
+    source_marker = _codec_source_marker(str(codec_source_path))
+    provenance_tag = (
+        f"codecs=candidate-derived ({source_marker}) NOT independently "
+        "verified; T4a=same-source NOT cross-verified"
+    )
+    decorated: list[dict[str, Any]] = []
+    for fact in codec_facts:
+        decorated_fact = dict(fact)
+        decorated_fact["provenance_tag"] = provenance_tag
+        decorated_fact["source"] = source_marker
+        decorated.append(decorated_fact)
+    return decorated
+
+
 def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
     workspace_context = input_envelope["workspace_context"]
     target_name = input_envelope["target_name"]
@@ -198,6 +252,11 @@ def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
     analysis_engine = input_envelope.get("analysis_engine") or "qgenie"
     test_mode = bool(input_envelope.get("test_mode"))
     analysis_timeout = input_envelope.get("analysis_timeout")
+    # WP G-3A.9 Goal-A: explicit candidate .dts source path. NAMED at
+    # the invocation site (Q1 ruling: option (a), never auto-discovery).
+    # ``None`` -> injection block is a no-op -> ``analysis["codecs"]``
+    # stays ``[]`` (backwards-compat guarantee).
+    codec_source_path = input_envelope.get("codec_source_path")
 
     workspace_root = Path(workspace_context["workspace_root"])
 
@@ -263,6 +322,49 @@ def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
                 analysis.setdefault("ipcat", {})["chipio_get_qups"] = _qups_payload
             break
 
+    # WP G-3A.9 Goal-A: candidate-derived codec injection.
+    #
+    # If the caller supplies ``codec_source_path`` (a candidate .dts,
+    # NAMED explicitly at the invocation site — never auto-discovered),
+    # read audio-codec nodes from it, decorate each with the
+    # honest-label ``provenance_tag`` + ``source`` marker, and inject
+    # the decorated list into ``analysis["codecs"]``. Downstream
+    # ``_build_audio_topology`` (envelope map) and ``_profile_cites``
+    # (citation dedup) already read ``analysis.get("codecs") or []``;
+    # no further wiring is required for the facts to flow through.
+    #
+    # HONEST-LABEL / SAME-SOURCE CAVEAT (mirrors the ``chipio_get_qups``
+    # block above): the source is an unmerged proposal, NOT independently
+    # verified against upstream / vendor documentation. The T4a authority
+    # in ``track_t4a`` also reads codec compatibles; loading the same
+    # candidate .dts for both sides makes any resulting ``T4a.codec.*``
+    # MATCH a same-source presence signal, NOT a cross-verified check.
+    # This wiring's value is OBSERVABILITY (populating
+    # ``audio_topology['codecs']`` so ``resolve_codec_verdicts`` can
+    # emit rich-evidence verdicts). Genuine cross-verify from an
+    # independent design authority is the future WP-SRC-C (see
+    # docs/PHASE3_KNOWN_GAPS.md G-3A.9 revision).
+    #
+    # HARD-FAIL INVARIANT: every codec fact injected into
+    # ``analysis["codecs"]`` MUST carry both ``provenance_tag`` and
+    # ``source``. The guard below fires on any output from
+    # ``_build_candidate_codecs`` missing either field — protecting
+    # against a monkey-patched decorator, a downstream mutation, or a
+    # future refactor that forgets the contract.
+    #
+    # BACKWARDS COMPAT: falsy ``codec_source_path`` -> ``[]`` from the
+    # helper -> ``analysis["codecs"]`` untouched (stays ``[]`` from
+    # QGenie's JSON, matching today's behavior on every existing run).
+    _candidate_codecs = _build_candidate_codecs(str(codec_source_path) if codec_source_path else "")
+    for _c in _candidate_codecs:
+        if not _c.get("provenance_tag") or not _c.get("source"):
+            raise RuntimeError(
+                "G-3A.9 invariant: injected codec must carry both "
+                "provenance_tag and source (candidate-derived contract)"
+            )
+    if _candidate_codecs:
+        analysis["codecs"] = _candidate_codecs
+
     # --- 3b. pin cross-check: schematic-derived GPIO/net findings (if QGenie
     # returned any) against the candidate patches' DT GPIO assignments. A
     # mismatch is NEEDS_REVIEW, never a hard failure -- see pin_crosscheck.py.
@@ -284,6 +386,7 @@ def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
         evidence_refs=evidence_refs,
         kernel_history=resolved["kernel_history"], power_model_hint=resolved["power_model_hint"],
         pin_crosschecks=pin_crosschecks, ipcat_mcp_requested=ipcat_mcp_requested,
+        codec_source_path=codec_source_path,
     )
 
     # --- 5. attach reasoning provenance for do_onboard to artifact (never logged) ---
@@ -312,6 +415,13 @@ def run_target_onboarding(input_envelope: dict[str, Any]) -> dict[str, Any]:
             kernel_commit=kernel_commit,
             evidence_sha256=evidence_sha256,
         ),
+        # WP G-3A.9 Goal-A manifest recording: NAMED explicit source
+        # for every injected codec. Present on every run (``None`` when
+        # no ``codec_source_path`` was supplied) so downstream artifact
+        # writers can prove the provenance chain at the manifest layer
+        # in addition to the per-codec ``provenance_tag`` / ``source``
+        # fields inside ``analysis["codecs"]``.
+        "codec_source": str(codec_source_path) if codec_source_path else None,
     }
     return output
 
@@ -476,7 +586,7 @@ def _map_analysis_to_envelope(
     *, analysis, target_name, run_id, kernel_source, kernel_source_path,
     evidence_roots, evidence_files, evidence_refs,
     kernel_history=None, power_model_hint=None, pin_crosschecks=None,
-    ipcat_mcp_requested=False,
+    ipcat_mcp_requested=False, codec_source_path=None,
 ) -> dict[str, Any]:
     kernel_history = kernel_history or {}
     power_model_hint = power_model_hint or {}
@@ -620,8 +730,26 @@ def _map_analysis_to_envelope(
         "audio_stack": analysis.get("audio_stack") or {},
         "power_model": pm,
         "cites": _profile_cites(analysis),
+        # WP G-3A.9 Q1 anchor: NAMED codec source recorded at the FLAT profile
+        # layer (mirror of ``output["_reasoning"]["codec_source"]``). Present on
+        # every run (``None`` when no ``codec_source_path`` was supplied) so
+        # ``profile.json`` on disk exposes the cross-artifact audit anchor —
+        # not just the per-codec ``provenance_tag`` / ``source`` fields inside
+        # ``qgenie_analysis.codecs``. Guarded below against silent drop.
+        "codec_source": str(codec_source_path) if codec_source_path else None,
         "qgenie_analysis": analysis,
     }
+    # G-3A.9 no-silent-drop guard: the flat manifest-layer ``codec_source``
+    # anchor MUST be present on every profile the writer will serialize.
+    # A KeyError (not a missing-key .get()) turns the "shows in memory,
+    # vanishes at serialization" failure the user flagged into a hard fail.
+    if "codec_source" not in target_profile:
+        raise RuntimeError(
+            "G-3A.9 invariant violated: target_profile is missing 'codec_source' "
+            "before serialization (see profile.json writer at "
+            "orchestrator/main.py:768). The manifest-layer audit anchor was "
+            "constructed but not attached — refusing to write a profile that "
+            "would silently drop it.")
 
     confidence = {
         "top": top_name or None,
