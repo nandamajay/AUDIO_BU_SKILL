@@ -23,6 +23,7 @@ Refs: PHASE3A_IMPLEMENTATION_PLAN.md §4 WP-SRC-A1,
       docs/PHASE3_KNOWN_GAPS.md G-3A.7, G-3A.9.
 """
 
+from .codec_resolver import resolve_codec_verdicts
 from .dt_reader import read_dt_pinctrl
 from .endpoints import EndpointFact, derive_endpoints_from_ipcat
 from .models import SOURCE_UNRESOLVED, sentinel_to_json_literal
@@ -35,5 +36,6 @@ __all__ = [
     "derive_endpoints_from_ipcat",
     "derive_pinmux_from_dt",
     "read_dt_pinctrl",
+    "resolve_codec_verdicts",
     "sentinel_to_json_literal",
 ]
