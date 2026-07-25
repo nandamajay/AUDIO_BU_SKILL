@@ -35,6 +35,7 @@ from orchestrator.source_ingest import (
     derive_endpoints_from_ipcat,
     derive_pinmux_from_dt,
     read_dt_pinctrl,
+    resolve_codec_verdicts,
     sentinel_to_json_literal,
 )
 
@@ -547,7 +548,7 @@ def _map_analysis_to_envelope(
 
     codecs = analysis.get("codecs") or []
     codec_part_numbers = sorted({c.get("part", "") for c in codecs if c.get("part")})
-    codec_verdicts = _derive_codec_verdicts(codec_part_numbers, kernel_source)
+    codec_verdicts = resolve_codec_verdicts(codec_part_numbers, kernel_source)
     if not codec_part_numbers:
         needs_review.append("codec_part_numbers: QGenie detected no codecs — verify evidence coverage")
 
@@ -824,24 +825,6 @@ def _ipcat_evidence_summary(
         "self_report_citations": self_report.get("citations") or [],
     }
 
-
-
-def _derive_codec_verdicts(codec_part_numbers: list[str], kernel_source: Path) -> dict[str, Any]:
-    """Best-effort codec verdicts: locate each detected codec's ASoC driver.
-
-    A detected driver present on disk is recorded ``upstream_present``; otherwise
-    ``unresolved`` (a human must decide needs_port/needs_write).
-    """
-    verdicts: dict[str, Any] = {}
-    codecs_dir = kernel_source / "sound" / "soc" / "codecs"
-    for part in sorted(codec_part_numbers):
-        driver = codecs_dir / f"{part.lower()}.c"
-        if driver.is_file():
-            verdicts[part] = {"driver_path": f"sound/soc/codecs/{part.lower()}.c",
-                              "status": "upstream_present"}
-        else:
-            verdicts[part] = {"driver_path": None, "status": "unresolved"}
-    return verdicts
 
 
 def _collect_citations(analysis: dict[str, Any]) -> list[str]:
