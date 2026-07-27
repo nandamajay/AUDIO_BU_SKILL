@@ -114,6 +114,8 @@ def _run_generation(
     *,
     kernel_source: str | None = None,
     soc_family_hint: str | None = None,
+    hint_provenance: str | None = None,
+    template: dict | None = None,
 ) -> None:
     """Fan-out to all registered generators; store results in ``gc["generation"]``.
 
@@ -140,6 +142,14 @@ def _run_generation(
         :func:`resolve_driver_source` discovers which ``.c`` file hosts the
         match table for this family. When absent, the legacy static path is
         used as fallback.
+    hint_provenance:
+        Origin of the soc_family_hint: ``"DONOR_DERIVED"`` (auto-extracted
+        from nearest_target), ``"CURATED"`` (explicit in case.py), or
+        ``None`` (absent → RESOLUTION_FAILED). Threaded to the descriptor.
+    template:
+        Optional H-1 AudioHardwareTemplate as a raw dict (parsed JSON).
+        Passed to the machine_driver lane for template-driven rendering.
+        When ``None``, all generators use their hardcoded fallbacks.
 
     Side effects
     ------------
@@ -171,7 +181,8 @@ def _run_generation(
     # DISCOVERED → use resolved paths; RESOLUTION_FAILED → degrade to static
     # defaults (backward-compatible). The descriptor is persisted in
     # gc["generation"]["source_resolution"] for artifact review.
-    descriptor = resolve_driver_source(kernel_source, soc_family_hint)
+    descriptor = resolve_driver_source(kernel_source, soc_family_hint,
+                                        hint_provenance=hint_provenance)
 
     # Build the read-only, board-agnostic source probe ONCE (missing tree →
     # all-FILE_NOT_FOUND, no raise). Disclosure-only: it is handed to the
@@ -184,7 +195,7 @@ def _run_generation(
         func = generator_func(artifact_class)
         try:
             if artifact_class == "machine_driver":
-                result: GenerationResult = func(facts, source=probe)  # type: ignore[call-arg]
+                result: GenerationResult = func(facts, source=probe, template=template)  # type: ignore[call-arg]
             else:
                 result = func(facts)  # type: ignore[call-arg]
         except Exception as exc:  # noqa: BLE001 — failure isolation per §WP10(h)
@@ -214,4 +225,5 @@ def _run_generation(
         "artifacts": [r.to_dict() for r in results],
         "post_verification": pv.to_dict(),
         "source_resolution": descriptor.to_dict(),
+        "template_used": template is not None,
     }

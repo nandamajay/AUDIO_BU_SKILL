@@ -69,6 +69,7 @@ class SocDriverDescriptor:
     driver_file: str | None = None
     match_table_symbol: str | None = None
     soc_family_hint: str | None = None
+    hint_provenance: str | None = None
     resolution_notes: tuple[str, ...] = field(default=())
 
     def to_dict(self) -> dict:
@@ -77,6 +78,7 @@ class SocDriverDescriptor:
             "driver_file": self.driver_file,
             "match_table_symbol": self.match_table_symbol,
             "soc_family_hint": self.soc_family_hint,
+            "hint_provenance": self.hint_provenance,
             "resolution_notes": list(self.resolution_notes),
         }
 
@@ -87,6 +89,7 @@ _SCAN_DIR = "sound/soc/qcom"
 def resolve_driver_source(
     tree: str | None,
     soc_family_hint: str | None,
+    hint_provenance: str | None = None,
 ) -> SocDriverDescriptor:
     """Discover which driver ``.c`` file hosts the target SoC family.
 
@@ -111,6 +114,11 @@ def resolve_driver_source(
         The SoC family string to look for in match-table ``.data`` fields
         (e.g. ``"sa8775p"``). This is a curated input — the resolver does
         not fabricate it.
+    hint_provenance:
+        Origin of the soc_family_hint: ``"DONOR_DERIVED"`` (auto-extracted
+        from nearest_target), ``"CURATED"`` (explicit in case.py), or
+        ``None`` (absent → RESOLUTION_FAILED). Threaded through to the
+        descriptor for audit trail.
     """
     if not tree or not soc_family_hint:
         notes = []
@@ -127,6 +135,7 @@ def resolve_driver_source(
         return SocDriverDescriptor(
             method=ResolutionMethod.RESOLUTION_FAILED,
             soc_family_hint=soc_family_hint,
+            hint_provenance=hint_provenance,
             resolution_notes=tuple(notes),
         )
 
@@ -136,6 +145,7 @@ def resolve_driver_source(
         return SocDriverDescriptor(
             method=ResolutionMethod.RESOLUTION_FAILED,
             soc_family_hint=soc_family_hint,
+            hint_provenance=hint_provenance,
             resolution_notes=(
                 f"RESOLUTION_FAILED: {_SCAN_DIR}/ not found in tree "
                 f"{tree!r}; cannot scan for machine drivers.",
@@ -166,6 +176,7 @@ def resolve_driver_source(
             driver_file=rel_path,
             match_table_symbol=symbol,
             soc_family_hint=soc_family_hint,
+            hint_provenance=hint_provenance,
             resolution_notes=(
                 f"DISCOVERED: soc_family_hint={soc_family_hint!r} matched "
                 f"in {rel_path} (symbol={symbol}); single unambiguous result.",
@@ -176,6 +187,7 @@ def resolve_driver_source(
         return SocDriverDescriptor(
             method=ResolutionMethod.RESOLUTION_FAILED,
             soc_family_hint=soc_family_hint,
+            hint_provenance=hint_provenance,
             resolution_notes=(
                 f"RESOLUTION_FAILED: soc_family_hint={soc_family_hint!r} "
                 f"not found in any match-table .data field across "
@@ -188,6 +200,7 @@ def resolve_driver_source(
     return SocDriverDescriptor(
         method=ResolutionMethod.RESOLUTION_FAILED,
         soc_family_hint=soc_family_hint,
+        hint_provenance=hint_provenance,
         resolution_notes=(
             f"RESOLUTION_FAILED: soc_family_hint={soc_family_hint!r} "
             f"matched in multiple files [{files}]; ambiguous resolution, "

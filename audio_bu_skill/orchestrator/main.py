@@ -554,6 +554,7 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
 
     if generate:
         import dataclasses
+        import json as _json_gen
 
         from orchestrator.generation.facts import project_facts
         from orchestrator.generation.model import GeneratedArtifact
@@ -562,20 +563,51 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
             _run_generation,
             write_artifact_bytes,
         )
+        from orchestrator.reasoning.crossverify import (
+            _T5_FAMILY_RE as _PHASE_A_FAMILY_RE,
+        )
+
         gc = output.get("generated_case") or {}
         try:
             facts = project_facts(gc.get("cross_verification", {}).get("rows", []))
-            # Phase B: resolve soc_family_hint from case.py (if exists).
+
+            # Phase A: three-tier SoC family provenance cascade.
+            #   CURATED (explicit soc_family_hint) > DONOR_DERIVED (from
+            #   nearest_target regex) > RESOLUTION_FAILED (both absent).
             soc_hint: str | None = None
+            hint_provenance: str | None = None
+            hw_template: dict | None = None
             try:
                 _case = load_case(target)
-                soc_hint = getattr(_case, "soc_family_hint", None) or None
+                raw_hint = getattr(_case, "soc_family_hint", None) or None
+                if raw_hint:
+                    soc_hint = raw_hint
+                    hint_provenance = "CURATED"
+                else:
+                    nearest = getattr(_case, "nearest_target", "") or ""
+                    _m = _PHASE_A_FAMILY_RE.search(nearest)
+                    if _m:
+                        soc_hint = _m.group("fam").lower()
+                        hint_provenance = "DONOR_DERIVED"
             except Exception:  # noqa: BLE001 — new targets won't have case.py
                 pass
+
+            # Phase A: load H-1 audio hardware template (raw dict, no model import).
+            _tmpl_path = (
+                Path(target_dir) / "h1_validation" / "audio_hardware_template.json"
+            )
+            if _tmpl_path.is_file():
+                try:
+                    hw_template = _json_gen.loads(_tmpl_path.read_text("utf-8"))
+                except (OSError, ValueError):
+                    pass
+
             _run_generation(
                 gc, facts,
                 kernel_source=kernel_source,
                 soc_family_hint=soc_hint,
+                hint_provenance=hint_provenance,
+                template=hw_template,
             )
         except MissingPhase2ASnapshot as exc:
             print(f"phase-2b: {exc}", file=sys.stderr)
