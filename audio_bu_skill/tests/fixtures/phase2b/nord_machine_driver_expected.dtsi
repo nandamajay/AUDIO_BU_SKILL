@@ -11,7 +11,7 @@
 / {
 	sound {
 		compatible = "qcom,nord-iq10-sndcard";
-		model = "IQ10-EVK";
+		model = "FIXME(board_variant): NOT_ATTESTED";
 
 		pinctrl-0 = <&i2s8_active>;
 		pinctrl-names = "default";

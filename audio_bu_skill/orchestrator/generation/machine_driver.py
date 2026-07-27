@@ -18,9 +18,9 @@ Nord-family scoping (WP5):
   NOT YET TARGET-AGNOSTIC (G-3A.13). Despite taking a ``TrustedFacts``
   argument and gating on target-derived cross-verify rows, this lane emits
   Nord identity from module-level constants (``_SNDCARD_COMPATIBLE`` /
-  ``_SNDCARD_MODEL`` / ``_PINCTRL_LABEL`` at :131/132/135, plus ``_DAI_LINKS``),
-  NOT from the target profile. On any non-Nord target it would emit Nord's
-  ``qcom,nord-iq10-sndcard`` / ``IQ10-EVK`` / ``i2s8_active`` — a silent
+  ``_MODEL_FIXME_LITERAL`` / ``_PINCTRL_LABEL`` at :143/144/147, plus
+  ``_DAI_LINKS``), NOT from the target profile. On any non-Nord target it would
+  emit Nord's ``qcom,nord-iq10-sndcard`` / ``i2s8_active`` — a silent
   wrong-output, not a crash. Multi-target correctness requires parameterizing
   these from the profile (a deferred generalization WP; see
   ``docs/PHASE3_KNOWN_GAPS.md`` G-3A.13). Until then treat this lane as
@@ -30,8 +30,15 @@ Nord-family scoping (WP5):
   * Sound card node — a NEW root child (``/ { sound { ... }; };``), not a label
     override. Two decisions baked in here (confirmed A/B for Nord IQ-10):
 
-    - **A — board-specific compatible.** ``compatible = "qcom,nord-iq10-sndcard"``
-      with ``model = "IQ10-EVK"``. We do NOT reuse ``qcom,qcs9100-sndcard``
+    - **A — board-specific compatible + NOT_ATTESTED board_variant (WP-69).**
+      ``compatible = "qcom,nord-iq10-sndcard"`` with the ``model`` property
+      emitted as the verbatim FIXME literal
+      ``"FIXME(board_variant): NOT_ATTESTED"`` (see WP-69,
+      ``docs/WP_69_BOARD_VARIANT_AUTHORITY.md``). No independent authority
+      attests the board variant name; the prior ``"IQ10-EVK"`` value traced to
+      candidate commit ``5267b2e1`` and fails the provenance guard. The gap is
+      disclosed via a ``sound_card.model.board_variant`` NOT_CROSS_CHECKABLE
+      row in ``contributes_rows``. We do NOT reuse ``qcom,qcs9100-sndcard``
       (which the first-pass patch used): reusing the qcs9100 string would
       falsely imply Nord IQ-10 is bit-compatible with the qcs9100 reference
       board. ``qcom,nord-iq10-sndcard`` is NOT in the upstream sc8280xp.c
@@ -138,10 +145,20 @@ _GATING_ROW_NAMES: tuple[str, ...] = (
     "T2.soundwire_master",
 )
 
-#: Board-specific sound-card compatible + model (decision A). NOT the
-#: qcs9100 reference-board string — see module docstring.
+#: Board-specific sound-card compatible + model FIXME literal (decision A,
+#: WP-69). ``_SNDCARD_COMPATIBLE`` is the board-specific compatible string —
+#: NOT the qcs9100 reference-board string; see module docstring.
+#: ``_MODEL_FIXME_LITERAL`` is the verbatim string emitted for the
+#: ``model =`` property: no authority attests the board variant name, so the
+#: generator emits a machine-parseable FIXME and discloses the gap via a
+#: ``sound_card.model.board_variant`` NOT_CROSS_CHECKABLE row.
 _SNDCARD_COMPATIBLE: str = "qcom,nord-iq10-sndcard"
-_SNDCARD_MODEL: str = "IQ10-EVK"
+_MODEL_FIXME_LITERAL: str = "FIXME(board_variant): NOT_ATTESTED"
+
+#: T5 partial-artifact subject for the board_variant NOT_ATTESTED disclosure
+#: (WP-69). Emitted verbatim into ``contributes_rows`` alongside the two
+#: decision-B port-ID rows and the decision-A driver-match row.
+_BOARD_VARIANT_CONTRIB_SUBJECT: str = "sound_card.model.board_variant"
 
 #: The WP3 pinctrl state-node label this card references.
 _PINCTRL_LABEL: str = "i2s8_active"
@@ -300,7 +317,7 @@ def generate_machine_driver(facts: TrustedFacts, kb: object | None = None) -> Ge
     lines.append("/ {")
     lines.append("\tsound {")
     lines.append(f"\t\tcompatible = \"{_SNDCARD_COMPATIBLE}\";")
-    lines.append(f"\t\tmodel = \"{_SNDCARD_MODEL}\";")
+    lines.append(f"\t\tmodel = \"{_MODEL_FIXME_LITERAL}\";")
     lines.append("")
     lines.append(f"\t\tpinctrl-0 = <&{_PINCTRL_LABEL}>;")
     lines.append("\t\tpinctrl-names = \"default\";")
@@ -362,6 +379,37 @@ def generate_machine_driver(facts: TrustedFacts, kb: object | None = None) -> Ge
 
     lines.append("\t};")
     lines.append("};")
+
+    # Board-variant NOT_ATTESTED partial-artifact row (WP-69, decision A). The
+    # emitted `model =` property is the verbatim FIXME literal because no
+    # independent authority attests the board variant name; the prior
+    # "IQ10-EVK" value traced to candidate commit `5267b2e1` and fails the
+    # provenance guard. Mirrors the sound_card.driver_match row shape.
+    contributes_rows.append(
+        VerificationRow(
+            track="T5",
+            subject=_BOARD_VARIANT_CONTRIB_SUBJECT,
+            verdict="NOT_CROSS_CHECKABLE",
+            coverage_gap_reason="authority_out_of_scope",
+            notes=[
+                "machine_driver: sound-card `model` field emitted as verbatim "
+                f"FIXME literal {_MODEL_FIXME_LITERAL!r} because no independent "
+                "authority attests the board variant name.",
+                "SCOPE: board-variant name (the string that populates `model =`).",
+                "NOT_ATTESTED: board_variant. reviewer_required=true.",
+                "Candidates present in evidence: (a) IQ10-EVK — appears only in "
+                "candidate DTS at commit 5267b2e1d7a5 and downstream records; "
+                "fails provenance guard. (b) IQ10-RRD — attested by schematic "
+                "PDFs LD20-94440/94441 and IQ10_RRD_IO_Mapping.xlsx in "
+                "audio_bu_skill/targets/nord-iq10/evidence/offline/, but no "
+                "ingestion pipeline exists to promote schematic evidence into "
+                "an authority row.",
+                "Reviewer must edit `model =` before bring-up. Follow-up "
+                "authority track queued behind WP_H-1_AUDIO_HARDWARE_TEMPLATE_"
+                "PROJECTOR (task #70) and a later board-metadata authority WP.",
+            ],
+        )
+    )
 
     # Driver-match partial-artifact row (decision A): the board-specific
     # compatible has no upstream driver match yet.

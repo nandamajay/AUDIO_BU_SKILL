@@ -9,8 +9,9 @@ Mirrors the WP3/WP4 discipline: inline data, no fakes, no network, no pytest.
      ``soundwire_master`` MATCH (instruction #1): the recorded WP2 fixture
      carries T2 DISAGREE, which correctly CLOSES the machine_driver gate — so
      the byte-identity happy-path cannot use the WP2 fixture directly. Also
-     asserts the three ``contributes_rows`` partial-artifact subjects
-     (decision A driver-match row + decision B per-link port_id rows).
+     asserts the four ``contributes_rows`` partial-artifact subjects
+     (decision B per-link port_id rows + WP-69 board_variant NOT_ATTESTED
+     disclosure + decision A driver-match row).
   2. ``test_t2_disagree_gate_closed_skipped`` — the recorded WP2 fixture (T2
      ``soundwire_master`` DISAGREE_WITH_AUTHORITY) closes the gate with
      ``gating_row_disagree_on_bus``, byte-identical to
@@ -184,13 +185,15 @@ def test_nord_generates_expected_machine_driver() -> None:
         f"path_hint drift: {result.path_hint!r}"
     )
 
-    # Three partial-artifact rows: two decision-B port_id rows (one per link)
-    # + one decision-A driver-match row. Order is emit order: playback link,
-    # capture link, then the trailing driver-match row.
+    # Four partial-artifact rows: two decision-B port_id rows (one per link)
+    # + the WP-69 board_variant NOT_ATTESTED disclosure + the decision-A
+    # driver-match row. Order is emit order: playback link, capture link,
+    # sound_card.model.board_variant, then the trailing driver-match row.
     contributed = [r.subject for r in result.contributes_rows]
     assert contributed == [
         "dai_link.port_id.i2s8_playback",
         "dai_link.port_id.i2s8_capture",
+        "sound_card.model.board_variant",
         "sound_card.driver_match.nord_iq10",
     ], f"contributes_rows subject/order drift: {contributed!r}"
     for r in result.contributes_rows:
