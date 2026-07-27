@@ -1,0 +1,76 @@
+{
+  "_fixture_marker": "H1-VALIDATION-FIXTURE-NOT-REAL-TARGET",
+  "soc": "<fixture: NOT_REAL_TARGET>",
+  "codecs": [
+    {"part_number": "synthetic-codec-swr", "vendor": "SYNTHETIC", "role": "primary"}
+  ],
+  "amplifiers": [
+    {"part_number": "synthetic-amp-swr", "vendor": "SYNTHETIC", "role": "left"}
+  ],
+  "buses": {"i2s": []},
+  "soundwire": {"present": true, "master_count": 1},
+  "cross_verification": {
+    "snapshot_provenance": {
+      "chip_alias": "<fixture: NOT_REAL_TARGET>",
+      "note": "synthetic-swr-min: SoundWire master 0, one codec + one amp"
+    },
+    "rows": [
+      {
+        "track": "T2",
+        "subject": "codec.synthetic-codec-swr",
+        "source": "synthetic-codec-swr",
+        "authority": {"strength": "IPCAT_DIRECT", "origin": "ipcat"},
+        "verdict": "MATCH",
+        "confidence": "high",
+        "coverage_gap_reason": null,
+        "rule_id": "ipcat.codec.swr",
+        "warning": null,
+        "review_actions": [],
+        "citations": ["<fixture: NOT_REAL_TARGET>: ipcat-direct-swr-codec"],
+        "notes": "Synthetic SoundWire codec attestation."
+      },
+      {
+        "track": "T2",
+        "subject": "amplifier.synthetic-amp-swr",
+        "source": "synthetic-amp-swr",
+        "authority": {"strength": "IPCAT_DERIVED", "origin": "ipcat"},
+        "verdict": "PARTIAL_MATCH",
+        "confidence": "medium",
+        "coverage_gap_reason": null,
+        "rule_id": "ipcat.amp.swr",
+        "warning": "PARTIAL_MATCH: revision-not-pinned",
+        "review_actions": ["reviewer confirms amp revision"],
+        "citations": ["<fixture: NOT_REAL_TARGET>: ipcat-derived-swr-amp"],
+        "notes": "Exercises the ATTESTED + reviewer_required=True path."
+      },
+      {
+        "track": "T4b",
+        "subject": "swr.0",
+        "source": "swr.0",
+        "authority": {"strength": "IPCAT_DIRECT", "origin": "ipcat"},
+        "verdict": "MATCH",
+        "confidence": "high",
+        "coverage_gap_reason": null,
+        "rule_id": "ipcat.swr.master",
+        "warning": null,
+        "review_actions": [],
+        "citations": ["<fixture: NOT_REAL_TARGET>: ipcat-swr-master"],
+        "notes": "SoundWire master 0 attestation."
+      },
+      {
+        "track": "T5",
+        "subject": "soc",
+        "source": null,
+        "authority": {"strength": "UNAVAILABLE", "origin": "none"},
+        "verdict": "REVIEW_REQUIRED",
+        "confidence": "none",
+        "coverage_gap_reason": "authority_unavailable",
+        "rule_id": "wp-71.disclosure",
+        "warning": "SoC identity requires human review in fixture",
+        "review_actions": ["reviewer must resolve SoC"],
+        "citations": ["<fixture: NOT_REAL_TARGET>: wp-71-disclosure"],
+        "notes": "Exercises the REVIEW_REQUIRED → NOT_ATTESTED + candidate_derived path."
+      }
+    ]
+  }
+}

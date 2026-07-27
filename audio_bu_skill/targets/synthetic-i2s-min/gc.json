@@ -1,0 +1,64 @@
+{
+  "_fixture_marker": "H1-VALIDATION-FIXTURE-NOT-REAL-TARGET",
+  "soc": "<fixture: NOT_REAL_TARGET>",
+  "codecs": [
+    {"part_number": "synthetic-codec-i2s", "vendor": "SYNTHETIC"}
+  ],
+  "amplifiers": [],
+  "buses": {
+    "i2s": [
+      {"instance": "0", "role": "playback"}
+    ]
+  },
+  "soundwire": {"present": false},
+  "cross_verification": {
+    "snapshot_provenance": {
+      "chip_alias": "<fixture: NOT_REAL_TARGET>",
+      "note": "synthetic-i2s-min: single I2S bus, one codec, no SoundWire"
+    },
+    "rows": [
+      {
+        "track": "T2",
+        "subject": "codec.synthetic-codec-i2s",
+        "source": "synthetic-codec-i2s",
+        "authority": {"strength": "KB_RULE", "origin": "audio-kb"},
+        "verdict": "MATCH",
+        "confidence": "high",
+        "coverage_gap_reason": null,
+        "rule_id": "kb.codec.i2s-basic",
+        "warning": null,
+        "review_actions": [],
+        "citations": ["<fixture: NOT_REAL_TARGET>: kb-rule-i2s-basic"],
+        "notes": "Synthetic fixture attesting a KB rule for a fabricated codec."
+      },
+      {
+        "track": "T4b",
+        "subject": "qup_i2s.0",
+        "source": "qup_i2s.0",
+        "authority": {"strength": "IPCAT_DERIVED", "origin": "ipcat"},
+        "verdict": "MATCH",
+        "confidence": "high",
+        "coverage_gap_reason": null,
+        "rule_id": "ipcat.qup.i2s",
+        "warning": null,
+        "review_actions": [],
+        "citations": ["<fixture: NOT_REAL_TARGET>: ipcat-derived-qup"],
+        "notes": "Synthetic I2S bus attestation."
+      },
+      {
+        "track": "T5",
+        "subject": "board_variant",
+        "source": null,
+        "authority": {"strength": "UNAVAILABLE", "origin": "none"},
+        "verdict": "NOT_CROSS_CHECKABLE",
+        "confidence": "none",
+        "coverage_gap_reason": "authority_out_of_scope",
+        "rule_id": "wp-69.disclosure",
+        "warning": "board_variant unavailable in fixture",
+        "review_actions": ["reviewer must resolve board_variant manually"],
+        "citations": ["<fixture: NOT_REAL_TARGET>: wp-69-disclosure"],
+        "notes": "Exercises the NCC → not_attested_disclosures path in the projector."
+      }
+    ]
+  }
+}
