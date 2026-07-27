@@ -160,6 +160,12 @@ def parse_args() -> argparse.Namespace:
                         help="override the case's evidence_source (default: use the case's own value)")
     parser.add_argument("--kernel-source", default=None,
                         help="path to the kernel git checkout (default: the case's kernel_source_path)")
+    parser.add_argument("--codec-source", default=None, metavar="DTS_PATH",
+                        help="WP G-3A.9: NAMED candidate .dts to inject audio-codec facts from; "
+                             "every injected codec is tagged 'codecs=candidate-derived NOT independently "
+                             "verified' and its source path is recorded in the run manifest at "
+                             "_reasoning.codec_source. No auto-discovery — omit to leave analysis['codecs'] "
+                             "untouched (backwards compat).")
     parser.add_argument("--analysis-engine", choices=ANALYSIS_ENGINES, default="qgenie",
                         help="reasoning engine for --onboard (default: qgenie, the only production engine); "
                              "'local-test' is a demoted regression comparator, rejected unless --test-mode is also set")
@@ -473,7 +479,8 @@ def _sha256_hex(b: bytes) -> str:
 
 def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str = "qgenie",
                 test_mode: bool = False, analysis_timeout: int | None = None,
-                generate: bool = False, dry_run: bool = False) -> None:
+                generate: bool = False, dry_run: bool = False,
+                codec_source_path: str | None = None) -> None:
     """Detect the nearest existing target and propose targets/<target>/case.generated.py.
 
     Read-only w.r.t. the kernel tree and case.py: it invokes only the
@@ -520,6 +527,11 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
         "analysis_engine": analysis_engine,
         "test_mode": test_mode,
         "analysis_timeout": analysis_timeout,
+        # WP G-3A.9 (option (a) explicit parameter): when set, the runner
+        # reads audio-codec nodes from this candidate .dts and injects
+        # them into ``analysis["codecs"]`` with the honest-label
+        # provenance_tag + source marker. Falsy -> untouched (compat).
+        "codec_source_path": codec_source_path,
     }
     try:
         output = orchestrator.invoke_skill("target_onboarding", envelope)
@@ -553,7 +565,7 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
         gc = output.get("generated_case") or {}
         try:
             facts = project_facts(gc.get("cross_verification", {}).get("rows", []))
-            _run_generation(gc, facts)
+            _run_generation(gc, facts, kernel_source=kernel_source)
         except MissingPhase2ASnapshot as exc:
             print(f"phase-2b: {exc}", file=sys.stderr)
             sys.exit(2)
@@ -1792,7 +1804,7 @@ def main() -> None:
     if args.onboard:
         do_onboard(args.onboard, args.kernel_source, args.analysis_engine, args.test_mode,
                    analysis_timeout=args.analysis_timeout, generate=args.generate,
-                   dry_run=args.dry_run)
+                   dry_run=args.dry_run, codec_source_path=args.codec_source)
         return
     do_run(args.target, args.evidence_source, args.kernel_source)
 

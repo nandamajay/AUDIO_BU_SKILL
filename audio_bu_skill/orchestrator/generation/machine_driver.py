@@ -126,6 +126,7 @@ from orchestrator.generation.model import (
     TrustedFacts,
 )
 from orchestrator.generation.registry import register_generator
+from orchestrator.generation.source_probe import ClaimStatus, SourceProbe
 from orchestrator.reasoning.crossverify_model import VerificationRow
 
 # ── Nord IQ-10 constants (WP5, Nord-family scoped) ──────────────────────────
@@ -206,6 +207,127 @@ _DAI_LINKS: tuple[dict[str, object], ...] = (
 )
 
 
+# ── Disclosure-note builders (source-grounded, byte-invariant) ──────────────
+#
+# These build the TEXT of the contributes_rows notes only. They never touch the
+# emitted DTSI bytes and never feed a gate. Each degrades honestly: when the
+# probe could not read a file the note says UNVERIFIED and cites the missing
+# path, never a fabricated FOUND / ABSENT.
+
+
+def _port_id_notes(
+    probe: SourceProbe,
+    *,
+    node: str,
+    port_macro: str,
+    port_value: int,
+    octonary_macro: str,
+    patch_line: int,
+) -> list[str]:
+    """Notes for one ``dai_link.port_id.*`` row, grounded on the ports header.
+
+    Reports BOTH ordinal ceilings (Option-(iii) ruling): the global name
+    ceiling (MI2S-inclusive) and the bind-relevant TDM-family ceiling, plus the
+    OCTONARY-TDM-defined observation and the missing TDM rungs — each with the
+    observed ``file:line`` when the header was read, or UNVERIFIED otherwise.
+    """
+    head = (
+        f"machine_driver: {node} emits {port_macro} ({port_value}) as a "
+        f"PLACEHOLDER for I2S8 (mirrors linux-nord/0004-*.patch:{patch_line}). "
+        "Reviewer must confirm the I2S8->AudioReach port mapping and add the "
+        "correct binding before bring-up."
+    )
+    if probe.ports_status is ClaimStatus.FILE_NOT_FOUND:
+        return [
+            head,
+            "UNVERIFIED: could not read "
+            f"{probe.ports_file} (no kernel-source tree supplied or file "
+            f"missing); the {octonary_macro} gap is asserted from the patch, "
+            "not observed from the header.",
+        ]
+
+    octo_status, octo_val, octo_line = probe.port_macro(octonary_macro)
+    if octo_status is ClaimStatus.ABSENT:
+        octo_txt = (
+            f"OBSERVED ABSENT: {octonary_macro} is not defined in "
+            f"{probe.ports_file}."
+        )
+    elif octo_status is ClaimStatus.FOUND:
+        octo_txt = (
+            f"OBSERVED FOUND: {octonary_macro} = {octo_val} at "
+            f"{probe.ports_file}:{octo_line} (upstream has caught up — reviewer "
+            "should switch the placeholder to the real macro)."
+        )
+    else:  # FILE_NOT_FOUND already handled; defensive.
+        octo_txt = f"UNVERIFIED: {octonary_macro} status unknown."
+
+    gnc = (
+        f"{probe.global_name_ceiling} "
+        f"({probe.ports_file}:{probe.global_name_ceiling_line})"
+        if probe.global_name_ceiling
+        else "none observed"
+    )
+    tfc = (
+        f"{probe.tdm_family_ceiling} "
+        f"({probe.ports_file}:{probe.tdm_family_ceiling_line})"
+        if probe.tdm_family_ceiling
+        else "none observed"
+    )
+    missing = ", ".join(probe.missing_rungs) if probe.missing_rungs else "none"
+    return [
+        head,
+        octo_txt,
+        f"OBSERVED global_name_ceiling = {gnc} (MI2S-inclusive).",
+        f"OBSERVED tdm_family_ceiling = {tfc} (bind-relevant for *_TDM_RX_0/TX_0).",
+        f"OBSERVED octonary_tdm_defined = {probe.octonary_tdm_defined.value}; "
+        f"missing_rungs = [{missing}].",
+    ]
+
+
+def _driver_match_notes(probe: SourceProbe, compatible: str) -> list[str]:
+    """Notes for the ``sound_card.driver_match.nord_iq10`` row.
+
+    Grounds the "compatible is not in the match table" assertion on an actual
+    read of ``sound/soc/qcom/sc8280xp.c``: OBSERVED ABSENT / FOUND when the
+    file was read, UNVERIFIED when it was not. ``compatible`` is the board
+    sound-card string; the probe itself is board-blind, so membership is a
+    query here rather than baked into the probe.
+    """
+    tail = (
+        "the card will not probe until a driver-side match-table extension is "
+        "added. Reviewer must add the compatible or bind to an existing family "
+        "match."
+    )
+    status, match_line = probe.driver_match(compatible)
+    if status is ClaimStatus.FILE_NOT_FOUND:
+        return [
+            f"machine_driver: UNVERIFIED — could not read {probe.driver_match_file} "
+            f"(no kernel-source tree supplied or file missing). Whether "
+            f"{compatible!r} is in {probe.match_table_symbol}[] is "
+            "asserted, not observed; " + tail,
+        ]
+    table_anchor = (
+        f"{probe.match_table_symbol}[], {probe.driver_match_file}:"
+        f"{match_line}"
+        if match_line is not None
+        else f"{probe.match_table_symbol}[] (symbol line not located)"
+    )
+    if status is ClaimStatus.ABSENT:
+        return [
+            f"machine_driver: OBSERVED ABSENT — compatible "
+            f"{compatible!r} is not in the sc8280xp.c match table "
+            f"({table_anchor}); " + tail,
+        ]
+    # FOUND — upstream already lists it; disclose that the assumption flipped.
+    return [
+        f"machine_driver: OBSERVED FOUND — compatible "
+        f"{compatible!r} IS present in the sc8280xp.c match table "
+        f"({table_anchor}); the card should probe against the existing driver. "
+        "Reviewer should confirm no board-specific match extension is still "
+        "required.",
+    ]
+
+
 @register_generator(
     "machine_driver",
     order=2,
@@ -216,7 +338,12 @@ _DAI_LINKS: tuple[dict[str, object], ...] = (
         ("T2", "*"),
     ),
 )
-def generate_machine_driver(facts: TrustedFacts, kb: object | None = None) -> GenerationResult:
+def generate_machine_driver(
+    facts: TrustedFacts,
+    kb: object | None = None,
+    *,
+    source: SourceProbe | None = None,
+) -> GenerationResult:
     """Emit a machine-driver artifact or a skipped verdict for one target.
 
     Pure, deterministic, zero I/O. Byte-identical ``facts.to_dict()`` produces
@@ -230,6 +357,15 @@ def generate_machine_driver(facts: TrustedFacts, kb: object | None = None) -> Ge
         Optional knowledge-base handle (reserved for symmetry with the other
         generators). WP5 does not consult a KB — the gating-row verdicts are
         the entire policy signal.
+    source:
+        Optional, disclosure-only :class:`SourceProbe` grounding the
+        driver-match and port-id notes against the real kernel tree. It is
+        keyword-only and defaults to ``None`` so every existing
+        ``generate_machine_driver(facts)`` caller is unaffected. The probe
+        NEVER reaches ``facts`` / ``cross_verification`` / any gate, and NEVER
+        changes the emitted DTSI bytes — it only hardens the provenance of the
+        ``contributes_rows`` notes (FOUND/ABSENT observation vs a hardcoded
+        assertion; UNVERIFIED when the tree/file is absent).
 
     Returns
     -------
@@ -242,6 +378,14 @@ def generate_machine_driver(facts: TrustedFacts, kb: object | None = None) -> Ge
     card per target.
     """
     del kb  # WP5 does not consult a KB — see docstring.
+
+    # Disclosure-only source grounding. When no probe is supplied (the default
+    # for every legacy `generate_machine_driver(facts)` caller and every test
+    # that does not pass one) synthesise an all-FILE_NOT_FOUND probe so the
+    # note-builders below render UNVERIFIED rather than a fabricated
+    # observation. The probe influences NOTE TEXT ONLY — never a gate, never
+    # the emitted bytes.
+    probe = source if source is not None else SourceProbe.from_tree(None)
 
     # ── Gate 1: T1 pinctrl — at least one T1.gpio.i2s.* open ────────────────
     pin_rows = _rows_with_prefix(facts, "T1.gpio.i2s.")
@@ -366,14 +510,14 @@ def generate_machine_driver(facts: TrustedFacts, kb: object | None = None) -> Ge
                 subject=contributes_subject,
                 verdict="NOT_CROSS_CHECKABLE",
                 coverage_gap_reason="authority_out_of_scope",
-                notes=[
-                    f"machine_driver: {node} emits {port_macro} ({port_value}) as a "
-                    f"PLACEHOLDER for I2S8; {octonary_macro} is not in "
-                    "include/dt-bindings/sound/qcom,q6dsp-lpass-ports.h upstream "
-                    f"(mirrors linux-nord/0004-*.patch:{patch_line}). Reviewer must "
-                    "confirm the I2S8->AudioReach port mapping and add the macro "
-                    "before bring-up."
-                ],
+                notes=_port_id_notes(
+                    probe,
+                    node=node,
+                    port_macro=port_macro,
+                    port_value=port_value,
+                    octonary_macro=octonary_macro,
+                    patch_line=patch_line,
+                ),
             )
         )
 
@@ -412,20 +556,17 @@ def generate_machine_driver(facts: TrustedFacts, kb: object | None = None) -> Ge
     )
 
     # Driver-match partial-artifact row (decision A): the board-specific
-    # compatible has no upstream driver match yet.
+    # compatible has no upstream driver match yet. The "not in the match table"
+    # claim is now grounded on a live read of sc8280xp.c (OBSERVED ABSENT/FOUND)
+    # or degraded to UNVERIFIED when no kernel tree was supplied — see
+    # _driver_match_notes. The row's subject/verdict/reason are unchanged.
     contributes_rows.append(
         VerificationRow(
             track="T5",
             subject="sound_card.driver_match.nord_iq10",
             verdict="NOT_CROSS_CHECKABLE",
             coverage_gap_reason="authority_out_of_scope",
-            notes=[
-                f"machine_driver: compatible {_SNDCARD_COMPATIBLE!r} is not in the "
-                "sc8280xp.c match table (snd_sc8280xp_dt_match[], "
-                "sound/soc/qcom/sc8280xp.c:166) upstream; the card will not probe "
-                "until a driver-side match-table extension is added. Reviewer must "
-                "add the compatible or bind to an existing family match."
-            ],
+            notes=_driver_match_notes(probe, _SNDCARD_COMPATIBLE),
         )
     )
 

@@ -73,6 +73,7 @@ from orchestrator.generation.registry import (
     generator_func,
     generator_order,
 )
+from orchestrator.generation.source_probe import SourceProbe
 
 
 class MissingPhase2ASnapshot(Exception):
@@ -106,7 +107,12 @@ def write_artifact_bytes(
     return dest
 
 
-def _run_generation(gc: dict, facts: TrustedFacts) -> None:
+def _run_generation(
+    gc: dict,
+    facts: TrustedFacts,
+    *,
+    kernel_source: str | None = None,
+) -> None:
     """Fan-out to all registered generators; store results in ``gc["generation"]``.
 
     Parameters
@@ -118,6 +124,14 @@ def _run_generation(gc: dict, facts: TrustedFacts) -> None:
     facts:
         A ``TrustedFacts`` projection of the Phase-2A verification rows,
         produced by ``project_facts`` at the do_onboard dispatch level.
+    kernel_source:
+        Optional path to the kernel git checkout (from
+        ``workspace_context["kernel_source"]``). When present a read-only,
+        disclosure-only :class:`SourceProbe` is built once and handed to the
+        machine_driver lane so its driver-match / port-id notes are grounded
+        on observed file contents instead of a hardcoded assertion. Defaults
+        to ``None`` — a missing tree degrades the notes to UNVERIFIED and never
+        changes any emitted bytes or any gate. Other lanes do not receive it.
 
     Side effects
     ------------
@@ -144,11 +158,20 @@ def _run_generation(gc: dict, facts: TrustedFacts) -> None:
     ensure_generators_loaded()
     order = generator_order()
 
+    # Build the read-only, board-agnostic source probe ONCE (missing tree →
+    # all-FILE_NOT_FOUND, no raise). Disclosure-only: it is handed to the
+    # machine_driver lane by keyword; no other lane receives it, and it never
+    # reaches facts, a gate, or the emitted bytes (§Move-2 Slice A).
+    probe = SourceProbe.from_tree(kernel_source)
+
     results: list[GenerationResult] = []
     for artifact_class in order:
         func = generator_func(artifact_class)
         try:
-            result: GenerationResult = func(facts)  # type: ignore[call-arg]
+            if artifact_class == "machine_driver":
+                result: GenerationResult = func(facts, source=probe)  # type: ignore[call-arg]
+            else:
+                result = func(facts)  # type: ignore[call-arg]
         except Exception as exc:  # noqa: BLE001 — failure isolation per §WP10(h)
             print(
                 f"  [generation] {artifact_class}: FAILED "
