@@ -1394,6 +1394,74 @@ def track_t5(
                     ],
                 )
             )
+        # ── Positive SoC-family attestation (WP G-3B-gamma) ─────────────────
+        # A MATCH is emitted per kind ∈ {compatible, firmware} when ALL hold:
+        #   (a) IPCAT authority confirms the target family (Path 1 invariant);
+        #   (b) no donor rule of that kind fired (mutual exclusivity per kind
+        #       — a donor leak already produced DISAGREE, so no MATCH);
+        #   (c) ``T5_TARGET_IDENTITY[target]`` supplies an expected prefix
+        #       for the kind; and
+        #   (d) the DTS text contains that expected prefix as a substring.
+        #
+        # Trust-chain contract: the MATCH row's authority is IPCAT (independent
+        # of any candidate patch); the DTS-text check is the second condition,
+        # not the anchor.
+        #
+        # SCOPE — explicit, non-negotiable:
+        #   * ``dts.compatible`` MATCH attests the SoC-family prefix ONLY.
+        #     It does NOT authorize any board-level compatible
+        #     (qcom,iq10-rrd, qcom,iq10-evk, or any downstream board variant).
+        #     Board-variant reconciliation is a separate track.
+        #   * ``dts.firmware`` MATCH attests the SoC-family firmware-path
+        #     prefix ONLY. It does not authorize any specific firmware binary
+        #     or a board-specific firmware variant.
+        donor_kinds_fired = {
+            rule["kind"] for rule, _ in _t5_matching_donor_rules(dts_text, target)
+        }
+        target_identity_meta = _T5_TARGET_IDENTITY.get(target) or {}
+        for kind, prefix_key, meta_key in (
+            ("compatible", "expected_compatible_prefix", "target_compatible_match"),
+            ("firmware",   "expected_firmware_prefix",   "target_firmware_match"),
+        ):
+            if kind in donor_kinds_fired:
+                continue  # donor leak already emitted DISAGREE for this kind
+            expected_prefix = target_identity_meta.get(prefix_key)
+            if not expected_prefix:
+                continue  # no KB entry for this target/kind — remain silent
+            if expected_prefix not in dts_text:
+                continue  # DTS does not attest the kind — remain silent
+            if kind == "compatible":
+                notes = [
+                    f"target-family compatible prefix {expected_prefix!r} present "
+                    f"in DTS; IPCAT authority confirms family={target}",
+                    "SCOPE: SoC-family attestation only",
+                    "NOT_ATTESTED: board_variant",
+                    "MATCH does NOT authorize qcom,iq10-rrd, qcom,iq10-evk, "
+                    "or any board-level compatible string; board-variant "
+                    "reconciliation is a separate track",
+                ]
+            else:  # firmware
+                notes = [
+                    f"target-family firmware prefix {expected_prefix!r} present "
+                    f"in DTS; IPCAT authority confirms family={target}",
+                    "SCOPE: SoC-family firmware-path prefix only",
+                    "MATCH does NOT authorize any specific firmware binary or "
+                    "board-specific firmware variant",
+                ]
+            rows.append(
+                _t5_row(
+                    subject=f"dts.{kind}",
+                    verdict="MATCH",
+                    source={"dts_prefix_found": expected_prefix},
+                    authority=dict(authority_value),
+                    confidence="high",
+                    citations=_t5_citations(
+                        chip_name, _T5_META_RULES[meta_key]
+                    ),
+                    review_actions=[],
+                    notes=notes,
+                )
+            )
         # Revision-anchor sweep — one NCC row iff DTS declares neither pin.
         # Emitted whenever the revision cannot be pinned; the note branches
         # so an empty DTS (no files provided) is distinguishable in the row's

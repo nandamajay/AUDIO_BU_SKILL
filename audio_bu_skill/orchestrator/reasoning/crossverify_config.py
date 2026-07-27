@@ -76,6 +76,14 @@ T5_DONOR_RULES: list[dict[str, str]] = [
 T5_META_RULES: dict[str, str] = {
     "silicon_identity":     "t5.meta.silicon.identity",
     "revision_not_pinned":  "t5.meta.revision.pin_required",
+    # WP G-3B-gamma — positive SoC-family attestation on Path 1.
+    # These rule ids anchor MATCH rows emitted when the DTS text carries the
+    # target family's expected compatible/firmware prefix. They attest the
+    # DTS SoC-family only; board-level compatibles (qcom,iq10-rrd,
+    # qcom,iq10-evk, etc.) are explicitly NOT within their scope — that
+    # reconciliation lives on a separate track (see task #69).
+    "target_compatible_match": "t5.target.compatible.match",
+    "target_firmware_match":   "t5.target.firmware.match",
 }
 
 

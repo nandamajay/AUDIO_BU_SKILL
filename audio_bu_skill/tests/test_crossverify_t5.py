@@ -206,11 +206,26 @@ def test_nord_donor_power_domain_leak_is_disagree_high() -> None:
     print("PASS: Nord + &rpmhpd LCX/LMX → DISAGREE_WITH_AUTHORITY (power_domain), high")
 
 
-# ── (d) No donor + no board-id/msm-id → NCC (revision_not_pinned) ──────────
+# ── (d) No donor + no revision pin + target prefixes → 2 MATCH + 1 NCC ─────
 
 
-def test_no_donor_no_revision_pin_is_not_cross_checkable() -> None:
-    """A well-formed sa8797p DTS with no pins → single NCC(revision_not_pinned)."""
+def test_no_donor_no_revision_pin_emits_positives_plus_ncc() -> None:
+    """DTS with target-family prefixes but no board pin → 2 MATCH + 1 NCC.
+
+    WP G-3B-gamma contract change: the positive-attestation branch on Path 1
+    fires per kind ∈ {compatible, firmware} whenever the target-identity
+    prefix is present in the DTS AND the donor of that kind did not fire.
+    This DTS carries BOTH ``qcom,sa8797p-`` (compatible) and ``sa8797p/``
+    (firmware), and no donor fires — so 2 MATCH rows are emitted.
+
+    Independently, the absence of ``qcom,board-id`` / ``qcom,msm-id`` still
+    yields NCC(revision_not_pinned): SoC-family attestation and board-revision
+    pinning are orthogonal axes. Family MATCH ≠ revision pinned.
+
+    Pre-G-3B-gamma this test asserted a single NCC row. The three-row output
+    is the deliberate behavior change of this WP; the assertions here mirror
+    case-(e)'s update for the same reason.
+    """
     dts = """
     remoteproc_adsp: remoteproc@30000000 {
         compatible = "qcom,sa8797p-adsp-pas";
@@ -218,27 +233,88 @@ def test_no_donor_no_revision_pin_is_not_cross_checkable() -> None:
     };
     """
     rows = track_t5(snapshot=_snap(_chips_ok()), dts=dts, kb=None)
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.subject == "dts.revision_anchor"
-    assert row.verdict == "NOT_CROSS_CHECKABLE"
-    assert row.coverage_gap_reason == "revision_not_pinned"
-    assert row.warning is False
-    assert row.confidence == "none"
-    assert row.authority["strength"] == "IPCAT_DIRECT"  # authority itself is present
+    assert len(rows) == 3, (
+        f"expected 3 rows (2 MATCH + 1 NCC), got {len(rows)}: "
+        f"{[(r.subject, r.verdict) for r in rows]}"
+    )
+    by_subject = {r.subject: r for r in rows}
+    assert set(by_subject) == {
+        "dts.compatible",
+        "dts.firmware",
+        "dts.revision_anchor",
+    }, by_subject
+
+    # ── NCC row (pre-existing behavior, unchanged by G-3B-gamma) ──────────
+    ncc = by_subject["dts.revision_anchor"]
+    assert ncc.verdict == "NOT_CROSS_CHECKABLE"
+    assert ncc.coverage_gap_reason == "revision_not_pinned"
+    assert ncc.warning is False
+    assert ncc.confidence == "none"
+    assert ncc.authority["strength"] == "IPCAT_DIRECT"  # authority present
     assert (
-        f"kb.rule:{_T5_META_RULES['revision_not_pinned']}" in row.citations
-    ), row.citations
-    assert f"chips_list_chips:{NORD_CHIP_NAME}" in row.citations
-    assert row.review_actions and "qcom,board-id" in row.review_actions[0]
-    print("PASS: no donor + no board-id/msm-id → NCC (revision_not_pinned)")
+        f"kb.rule:{_T5_META_RULES['revision_not_pinned']}" in ncc.citations
+    ), ncc.citations
+    assert f"chips_list_chips:{NORD_CHIP_NAME}" in ncc.citations
+    assert ncc.review_actions and "qcom,board-id" in ncc.review_actions[0]
+
+    # ── MATCH rows (new WP G-3B-gamma positive-attestation branch) ────────
+    for kind_subject, expected_prefix, meta_key in (
+        ("dts.compatible", "qcom,sa8797p-", "target_compatible_match"),
+        ("dts.firmware",   "sa8797p/",      "target_firmware_match"),
+    ):
+        row = by_subject[kind_subject]
+        assert row.track == "T5"
+        assert row.verdict == "MATCH"
+        assert row.warning is False, (
+            f"MATCH row {kind_subject!r} must not warn (would close is_open gate)"
+        )
+        assert row.confidence == "high"
+        assert row.authority["strength"] == "IPCAT_DIRECT"
+        assert row.source.get("dts_prefix_found") == expected_prefix
+        assert f"chips_list_chips:{NORD_CHIP_NAME}" in row.citations
+        assert (
+            f"kb.rule:{_T5_META_RULES[meta_key]}" in row.citations
+        ), row.citations
+        assert row.review_actions == []
+        assert any(
+            "SCOPE:" in n for n in row.notes
+        ), f"MATCH row {kind_subject!r} missing SCOPE line: {row.notes!r}"
+
+    # Compat MATCH carries the board-variant disclosure; firmware MATCH does not.
+    assert any(
+        "NOT_ATTESTED: board_variant" == n
+        for n in by_subject["dts.compatible"].notes
+    ), by_subject["dts.compatible"].notes
+    assert not any(
+        "NOT_ATTESTED: board_variant" == n
+        for n in by_subject["dts.firmware"].notes
+    ), "firmware MATCH must not carry board_variant disclosure"
+
+    print(
+        "PASS: no donor + no revision pin → 2 MATCH (compatible + firmware) "
+        "+ 1 NCC(revision_not_pinned)"
+    )
 
 
-# ── (e) Valid board-id + no donor → [] ─────────────────────────────────────
+# ── (e) Valid board-id + no donor → 2 positive MATCH rows (WP G-3B-gamma) ──
 
 
-def test_valid_revision_pin_and_no_donor_is_empty() -> None:
-    """A DTS that both pins the revision AND avoids donor namespaces → []."""
+def test_valid_revision_pin_and_no_donor_emits_positive_matches() -> None:
+    """A DTS that pins the revision AND avoids donor namespaces AND carries
+    the target-family compatible/firmware prefixes → 2 positive MATCH rows.
+
+    G-3B-gamma changed the T5 contract: on Path 1 (IPCAT authority available)
+    a MATCH row is emitted per kind ∈ {compatible, firmware} when the donor
+    of that kind did NOT fire, ``T5_TARGET_IDENTITY`` supplies an expected
+    prefix, and the DTS text contains that prefix. This DTS satisfies all
+    four conditions for BOTH kinds → 2 MATCH rows. This replaces the older
+    ``assert rows == []`` behavior — the case-(e) input is now legitimately
+    a positive attestation, not silence.
+
+    The MATCH row's ``notes`` are load-bearing: they carry the SCOPE line,
+    the ``NOT_ATTESTED: board_variant`` disclosure (compatible only), and
+    the explicit non-authorization enumeration of board-level compatibles.
+    """
     dts = """
     remoteproc_adsp: remoteproc@30000000 {
         compatible = "qcom,sa8797p-adsp-pas";
@@ -249,8 +325,67 @@ def test_valid_revision_pin_and_no_donor_is_empty() -> None:
     };
     """
     rows = track_t5(snapshot=_snap(_chips_ok()), dts=dts, kb=None)
-    assert rows == [], f"expected [] (nothing to flag), got {[r.verdict for r in rows]}"
-    print("PASS: valid revision pin + no donor namespace → [] (fully cross-checkable)")
+    assert len(rows) == 2, (
+        f"expected 2 MATCH rows (dts.compatible + dts.firmware), got "
+        f"{len(rows)}: {[(r.subject, r.verdict) for r in rows]}"
+    )
+    by_subject = {r.subject: r for r in rows}
+    assert set(by_subject) == {"dts.compatible", "dts.firmware"}, by_subject
+
+    # Both rows share the invariant Path-1 authority anchor (IPCAT_DIRECT).
+    for row in rows:
+        assert row.track == "T5"
+        assert row.verdict == "MATCH"
+        assert row.warning is False, (
+            f"MATCH row must not warn (would close is_open gate): {row.subject}"
+        )
+        assert row.confidence == "high"
+        assert row.authority["strength"] == "IPCAT_DIRECT"
+        assert row.authority["origin"] == _T5_AUTH_ORIGIN
+        assert row.authority["value"]["canonical_family"] == "sa8797p"
+        assert row.authority["value"]["chip_name"] == NORD_CHIP_NAME
+        assert f"chips_list_chips:{NORD_CHIP_NAME}" in row.citations
+        assert row.review_actions == []
+
+    compat_row = by_subject["dts.compatible"]
+    assert compat_row.source.get("dts_prefix_found") == "qcom,sa8797p-"
+    assert (
+        f"kb.rule:{_T5_META_RULES['target_compatible_match']}" in compat_row.citations
+    ), compat_row.citations
+    # Tightened disclosure contract: SCOPE + NOT_ATTESTED + enumeration.
+    assert any(
+        "SCOPE: SoC-family attestation only" in n for n in compat_row.notes
+    ), compat_row.notes
+    assert any(
+        "NOT_ATTESTED: board_variant" == n for n in compat_row.notes
+    ), compat_row.notes
+    assert any("qcom,iq10-rrd" in n for n in compat_row.notes), compat_row.notes
+    assert any("qcom,iq10-evk" in n for n in compat_row.notes), compat_row.notes
+    assert any(
+        "board-variant reconciliation is a separate track" in n
+        for n in compat_row.notes
+    ), compat_row.notes
+
+    fw_row = by_subject["dts.firmware"]
+    assert fw_row.source.get("dts_prefix_found") == "sa8797p/"
+    assert (
+        f"kb.rule:{_T5_META_RULES['target_firmware_match']}" in fw_row.citations
+    ), fw_row.citations
+    assert any(
+        "SCOPE: SoC-family firmware-path prefix only" in n for n in fw_row.notes
+    ), fw_row.notes
+    assert any(
+        "does NOT authorize any specific firmware binary" in n for n in fw_row.notes
+    ), fw_row.notes
+    # firmware MATCH must NOT carry the board_variant line — that's a
+    # compatible-only concern per the design contract.
+    assert not any("NOT_ATTESTED: board_variant" == n for n in fw_row.notes), (
+        "firmware MATCH must not carry board_variant disclosure"
+    )
+    print(
+        "PASS: valid revision pin + no donor + target-family prefixes → "
+        "2 MATCH rows (dts.compatible + dts.firmware) with tightened disclosure"
+    )
 
 
 # ── (f) Authority unavailable + source family=sa8797p + sa8775p donor →
@@ -434,8 +569,8 @@ def main() -> None:
     test_nord_donor_compatible_leak_is_disagree_high()               # a
     test_nord_donor_firmware_leak_is_disagree_high()                 # b
     test_nord_donor_power_domain_leak_is_disagree_high()             # c
-    test_no_donor_no_revision_pin_is_not_cross_checkable()           # d
-    test_valid_revision_pin_and_no_donor_is_empty()                  # e
+    test_no_donor_no_revision_pin_emits_positives_plus_ncc()         # d
+    test_valid_revision_pin_and_no_donor_emits_positive_matches()    # e
     test_authority_unavailable_source_family_present_donor_leaks_medium()  # f
     test_authority_unavailable_no_source_family_is_single_ncc()      # g
     test_empty_dts_authority_ok_is_revision_not_pinned_ncc()         # g2 (Fix 3)
