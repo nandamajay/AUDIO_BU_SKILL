@@ -565,7 +565,18 @@ def do_onboard(target: str, cli_kernel_source: str | None, analysis_engine: str 
         gc = output.get("generated_case") or {}
         try:
             facts = project_facts(gc.get("cross_verification", {}).get("rows", []))
-            _run_generation(gc, facts, kernel_source=kernel_source)
+            # Phase B: resolve soc_family_hint from case.py (if exists).
+            soc_hint: str | None = None
+            try:
+                _case = load_case(target)
+                soc_hint = getattr(_case, "soc_family_hint", None) or None
+            except Exception:  # noqa: BLE001 — new targets won't have case.py
+                pass
+            _run_generation(
+                gc, facts,
+                kernel_source=kernel_source,
+                soc_family_hint=soc_hint,
+            )
         except MissingPhase2ASnapshot as exc:
             print(f"phase-2b: {exc}", file=sys.stderr)
             sys.exit(2)

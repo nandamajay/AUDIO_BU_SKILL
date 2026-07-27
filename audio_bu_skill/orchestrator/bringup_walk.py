@@ -58,6 +58,9 @@ class BringupCase:
     source_intake_paths: dict[str, str] = field(default_factory=dict)  # optional explicit *_path overrides
     scaffold_reason: str = "evidence sources resolved"
 
+    # Phase B: SoC-aware source resolution (curated input, REVIEW_REQUIRED)
+    soc_family_hint: str = ""
+
     # codec_driver_porting (SCAFFOLD -> PATCH_APPLIED, or -> TRIAGE if it blocks)
     kernel_source_path: str = ""
     codec_part_numbers: list[str] = field(default_factory=list)

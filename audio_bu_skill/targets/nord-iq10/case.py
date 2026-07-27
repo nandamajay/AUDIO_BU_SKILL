@@ -32,6 +32,10 @@ CASE = BringupCase(
     run_id="nord-iq10-audio-bringup-2026-07",
     case_version="1.0.0",
 
+    # Phase B: SoC-aware driver source resolution (curated, REVIEW_REQUIRED).
+    # sa8775p = the lemans-family machine-driver host SoC in sc8280xp.c.
+    soc_family_hint="sa8775p",
+
     # --- source_intake: INIT -> SCAFFOLD ---
     power_model_source="QGenie deep-research over soc_commit/Confluence/Jira (QSTABILITY-24906579)",
     evidence_source="ipcat_first",

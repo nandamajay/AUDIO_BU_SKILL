@@ -40,13 +40,18 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-# ── The two literal files this probe is permitted to open. ──────────────────
-_DRIVER_MATCH_REL = "sound/soc/qcom/sc8280xp.c"
+if TYPE_CHECKING:
+    from orchestrator.generation.soc_descriptor import SocDriverDescriptor
+
+# ── Default literal paths (legacy static fallback). ─────────────────────────
+# These are used ONLY when no SocDriverDescriptor is supplied — i.e. the
+# Phase B resolution was not invoked (backward-compatible with Slice A tests).
+_DRIVER_MATCH_REL_DEFAULT = "sound/soc/qcom/sc8280xp.c"
+_MATCH_TABLE_SYMBOL_DEFAULT = "snd_sc8280xp_dt_match"
+
 _PORTS_HDR_REL = "include/dt-bindings/sound/qcom,q6dsp-lpass-ports.h"
-
-#: The match-table symbol whose membership decides claim (a).
-_MATCH_TABLE_SYMBOL = "snd_sc8280xp_dt_match"
 
 #: Every ``.compatible = "..."`` string literal (the match-table entries).
 _COMPATIBLE_RE = re.compile(r'\.compatible\s*=\s*"([^"]+)"')
@@ -97,8 +102,8 @@ class SourceProbe:
     #: a per-compatible query (:meth:`driver_match`) so the probe stays board-
     #: agnostic and the runner never needs the board's compatible string.
     driver_status: ClaimStatus = ClaimStatus.FILE_NOT_FOUND
-    match_table_symbol: str = _MATCH_TABLE_SYMBOL
-    driver_match_file: str = _DRIVER_MATCH_REL
+    match_table_symbol: str = _MATCH_TABLE_SYMBOL_DEFAULT
+    driver_match_file: str = _DRIVER_MATCH_REL_DEFAULT
     match_table_line: int | None = None
     #: Every ``.compatible = "..."`` literal observed in the driver .c, in file
     #: order. Empty when the file was unreadable. The raw observation from which
@@ -122,7 +127,12 @@ class SourceProbe:
 
     # ── construction ────────────────────────────────────────────────────────
     @classmethod
-    def from_tree(cls, tree: str | None) -> "SourceProbe":
+    def from_tree(
+        cls,
+        tree: str | None,
+        *,
+        descriptor: "SocDriverDescriptor | None" = None,
+    ) -> "SourceProbe":
         """Build a probe by reading at most the two literal files under ``tree``.
 
         ``tree`` may be ``None`` or a path that does not exist / is not a
@@ -130,26 +140,63 @@ class SourceProbe:
         with no exception raised. The probe is board-agnostic: it records the
         raw match-table compatibles it observed, and the caller asks about a
         specific board string via :meth:`driver_match`.
+
+        Parameters
+        ----------
+        descriptor:
+            Optional :class:`SocDriverDescriptor` from Phase B resolution.
+            When present and ``method == DISCOVERED``, uses its
+            ``driver_file`` and ``match_table_symbol`` instead of the
+            legacy static defaults. When absent or RESOLUTION_FAILED,
+            falls back to the static paths (backward-compatible).
         """
+        from orchestrator.generation.soc_descriptor import (
+            ResolutionMethod,
+            SocDriverDescriptor as _Desc,
+        )
+
+        # Resolve which driver file + symbol to use.
+        if (
+            descriptor is not None
+            and descriptor.method == ResolutionMethod.DISCOVERED
+            and descriptor.driver_file
+            and descriptor.match_table_symbol
+        ):
+            driver_rel = descriptor.driver_file
+            match_sym = descriptor.match_table_symbol
+        else:
+            driver_rel = _DRIVER_MATCH_REL_DEFAULT
+            match_sym = _MATCH_TABLE_SYMBOL_DEFAULT
+
         if not tree:
-            return cls(tree=tree)
+            return cls(
+                tree=tree,
+                driver_match_file=driver_rel,
+                match_table_symbol=match_sym,
+            )
 
         root = Path(tree)
         if not root.is_dir():
-            return cls(tree=tree)
+            return cls(
+                tree=tree,
+                driver_match_file=driver_rel,
+                match_table_symbol=match_sym,
+            )
 
-        driver = cls._probe_driver_match(root)
+        driver = cls._probe_driver_match(root, driver_rel, match_sym)
         ports = cls._probe_ports(root)
         return cls(tree=tree, **driver, **ports)
 
     # ── claim (a) ────────────────────────────────────────────────────────────
     @staticmethod
-    def _probe_driver_match(root: Path) -> dict:
-        path = root / _DRIVER_MATCH_REL
+    def _probe_driver_match(root: Path, driver_rel: str, match_sym: str) -> dict:
+        path = root / driver_rel
         text = _safe_read(path)
         if text is None:
             return {
                 "driver_status": ClaimStatus.FILE_NOT_FOUND,
+                "driver_match_file": driver_rel,
+                "match_table_symbol": match_sym,
                 "match_table_line": None,
                 "match_table_compatibles": (),
             }
@@ -157,15 +204,15 @@ class SourceProbe:
         match_table_line: int | None = None
         compatibles: list[str] = []
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if match_table_line is None and _MATCH_TABLE_SYMBOL in line:
+            if match_table_line is None and match_sym in line:
                 match_table_line = lineno
             m = _COMPATIBLE_RE.search(line)
             if m:
                 compatibles.append(m.group(1))
-        # FOUND here means only that the driver .c was read; per-board membership
-        # is decided later by :meth:`driver_match`, keeping the probe board-blind.
         return {
             "driver_status": ClaimStatus.FOUND,
+            "driver_match_file": driver_rel,
+            "match_table_symbol": match_sym,
             "match_table_line": match_table_line,
             "match_table_compatibles": tuple(compatibles),
         }

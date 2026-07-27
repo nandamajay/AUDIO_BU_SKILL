@@ -74,6 +74,7 @@ from orchestrator.generation.registry import (
     generator_order,
 )
 from orchestrator.generation.source_probe import SourceProbe
+from orchestrator.generation.soc_descriptor import resolve_driver_source
 
 
 class MissingPhase2ASnapshot(Exception):
@@ -112,6 +113,7 @@ def _run_generation(
     facts: TrustedFacts,
     *,
     kernel_source: str | None = None,
+    soc_family_hint: str | None = None,
 ) -> None:
     """Fan-out to all registered generators; store results in ``gc["generation"]``.
 
@@ -132,6 +134,12 @@ def _run_generation(
         on observed file contents instead of a hardcoded assertion. Defaults
         to ``None`` — a missing tree degrades the notes to UNVERIFIED and never
         changes any emitted bytes or any gate. Other lanes do not receive it.
+    soc_family_hint:
+        Optional SoC family string (e.g. ``"sa8775p"``) from curated input.
+        Drives Phase B SoC-aware driver source resolution. When present,
+        :func:`resolve_driver_source` discovers which ``.c`` file hosts the
+        match table for this family. When absent, the legacy static path is
+        used as fallback.
 
     Side effects
     ------------
@@ -140,6 +148,7 @@ def _run_generation(
         {
             "artifacts": [result.to_dict(), ...],   # GeneratedArtifact | GeneratorSkipped
             "post_verification": pv.to_dict(),       # PostVerificationResult
+            "source_resolution": descriptor.to_dict(),  # SocDriverDescriptor (Phase B)
         }
 
     where ``artifacts`` is in canonical generator order, each failed
@@ -158,11 +167,17 @@ def _run_generation(
     ensure_generators_loaded()
     order = generator_order()
 
+    # Phase B: resolve driver source from kernel tree + SoC family hint.
+    # DISCOVERED → use resolved paths; RESOLUTION_FAILED → degrade to static
+    # defaults (backward-compatible). The descriptor is persisted in
+    # gc["generation"]["source_resolution"] for artifact review.
+    descriptor = resolve_driver_source(kernel_source, soc_family_hint)
+
     # Build the read-only, board-agnostic source probe ONCE (missing tree →
     # all-FILE_NOT_FOUND, no raise). Disclosure-only: it is handed to the
     # machine_driver lane by keyword; no other lane receives it, and it never
     # reaches facts, a gate, or the emitted bytes (§Move-2 Slice A).
-    probe = SourceProbe.from_tree(kernel_source)
+    probe = SourceProbe.from_tree(kernel_source, descriptor=descriptor)
 
     results: list[GenerationResult] = []
     for artifact_class in order:
@@ -198,4 +213,5 @@ def _run_generation(
     gc["generation"] = {
         "artifacts": [r.to_dict() for r in results],
         "post_verification": pv.to_dict(),
+        "source_resolution": descriptor.to_dict(),
     }
