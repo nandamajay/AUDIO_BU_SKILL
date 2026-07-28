@@ -869,10 +869,46 @@ above as the *first* close; the full audit is the true backlog.
 
 ### Status
 
-**OPEN.** Not a Phase-3A-scorecard blocker (the scorecard counts whether the
-generator PRODUCES an artifact, not whether the artifact is *target-correct*),
-but a **HARD blocker for the north-star's "fresh targets" clause.** Must
-close before any second target's `machine_driver` output is trusted.
+**OPEN (partially addressed by Phase A, commit `202691c`).** Not a
+Phase-3A-scorecard blocker (the scorecard counts whether the generator
+PRODUCES an artifact, not whether the artifact is *target-correct*), but a
+**HARD blocker for the north-star's "fresh targets" clause.** Must close
+before any second target's `machine_driver` output is trusted.
+
+#### Phase A progress (2026-07-28, commit `202691c`)
+
+Phase A wired the H-1 AudioHardwareTemplate into `machine_driver` as a
+template-override mechanism. Two of the three named constants are now
+**template-OVERRIDABLE** (proven by `TestTemplateOverrideEffective` in
+`tests/test_phase_a_template_wiring.py`):
+
+| Constant | Template key path | Override status |
+|----------|------------------|----------------|
+| `_MODEL_FIXME_LITERAL` (`:157`) | `board_metadata.board_variant` | **OVERRIDABLE** — ATTESTED value replaces FIXME literal |
+| `_PINCTRL_LABEL` (`:165`) | `board_metadata.pinctrl_state` | **OVERRIDABLE** — ATTESTED value replaces `i2s8_active` |
+| `_SNDCARD_COMPATIBLE` (`:156`) | (no template path) | **NOT yet overridable** — stays hardcoded |
+
+Evidence (test proof, all SYNTHETIC fixture, NOT real-target):
+- `test_attested_model_overrides_fixme_literal` — ATTESTED `"SYNTH-EVK-2.0"` → emitted `model = "SYNTH-EVK-2.0"`, FIXME literal absent
+- `test_attested_pinctrl_overrides_hardcoded_label` — ATTESTED `"i2s3_active"` → emitted `<&i2s3_active>`, hardcoded `i2s8_active` absent
+- `test_attested_template_differs_from_fixture` — output bytes DIFFER from Nord fixture (override is effective, not inert)
+- `test_not_attested_falls_back_to_constant` — NOT_ATTESTED → byte-identical to fixture (fallback works)
+
+On real Nord: template is all-NOT_ATTESTED → all fallbacks fire →
+byte-identity preserved. The wiring is **effective but dormant on Nord.**
+
+#### What remains OPEN for G-3A.13 closure
+
+1. `_SNDCARD_COMPATIBLE` — not yet template-overridable (needs a template
+   key path design decision: board_metadata.compatible? Or derived from
+   soc_family + board_variant?)
+2. `_DAI_LINKS` — codec labels, link names, port macros still hardcoded Nord
+3. `_CPU_DAI_LABEL` / `_PLATFORM_DAI_LABEL` — not in template (kernel-derived)
+4. Three other lanes (`dt_scaffolding`, `codec_stub`, `audioreach_topology`) —
+   untouched by Phase A, still fully Nord-hardcoded
+5. Comment/FIXME text references (output-visible Nord literals)
+
+G-3A.13 **REMAINS OPEN**. Phase A is necessary but not sufficient.
 
 ### Generality audit — hardcoded Nord/SA8797P literals in the four generator code paths
 
@@ -927,4 +963,92 @@ present as target-agnostic but are not. Closing G-3A.13 as literally scoped
 only; the "fresh targets" north-star clause is **not** satisfied until the
 remaining lanes are parameterized or each is re-declared Nord-only in its own
 gap entry.
+
+---
+
+## G-PhB.1 — Structural-not-semantic driver resolution (known limitation)
+
+### Title
+
+`resolve_driver_source` is structural (regex), not semantic (build/compile)
+
+### Problem
+
+`soc_descriptor.py:resolve_driver_source` matches `soc_family_hint` against
+`MODULE_DEVICE_TABLE(of, <sym>)` entries using regex
+(`_MODULE_DEVICE_TABLE_RE`, `_MATCH_ENTRY_DATA_RE`). It confirms a file
+**declares** a match-table entry referencing the SoC family. It does NOT
+confirm:
+
+- That the file actually **compiles** the sound card driver for that family.
+- That the matched `compatible` string is the correct machine-driver entry
+  point (vs. a stale/disabled/ifdef'd entry).
+- That `make M=sound/soc/qcom/ CONFIG_SND_SOC_QCOM_SC8280XP=y` would succeed.
+
+### Impact
+
+A resolved DISCOVERED descriptor is a structural presence signal. A file
+could reference `"sa8775p"` in a disabled `#if 0` block, a test array, or a
+superseded table, and the resolver would still return DISCOVERED. The risk is
+**false-positive resolution, not false-negative** — the resolver cannot miss a
+real entry (regexes are exhaustive over `*.c`), but it can match a dead one.
+
+### Accepted because
+
+1. Every DISCOVERED descriptor flows into `gc["generation"]["source_resolution"]`
+   as a reviewer-visible disclosure — never silent.
+2. The `source_probe.py` path validation (`_probe_driver_match`) ALSO reads the
+   resolved file and extracts `match_table_compatibles` from the actual text,
+   providing a second structural check.
+3. Semantic validation (compile test) is out of scope for a read-only,
+   deterministic resolver; it belongs in a future CI-integration layer.
+
+### Status
+
+**Accepted known limitation.** Not a blocker for Phase B or Phase A.
+
+---
+
+## G-PhB.2 — `_MATCH_ENTRY_DATA_RE` assumes positional `.data` init
+
+### Title
+
+Regex assumes `{.compatible = "...", "family_string"}` positional form
+
+### Problem
+
+`soc_descriptor.py:_MATCH_ENTRY_DATA_RE` matches the pattern:
+```
+{.compatible = "qcom,...", "sa8775p"}
+```
+(a bare string after the compatible assignment, interpreted as positional
+initializer for the `.data` field of `struct of_device_id`).
+
+Upstream kernel style ALSO permits:
+```
+{.compatible = "qcom,...", .data = (void *)&sa8775p_data}
+```
+(named `.data` field with a pointer cast). The regex does NOT match this form.
+
+### Impact
+
+If upstream evolves the sc8280xp.c (or any future driver) to named-`.data`
+pointer style, `resolve_driver_source` would fail to find the family match and
+degrade to RESOLUTION_FAILED with a disclosure. This is **honest degradation**
+(the resolver admits it cannot resolve), never silent wrong-output.
+
+### Accepted because
+
+1. As of linux-nord (6.12-rc6 base), all sa8775p-family match-table entries use
+   positional form — the regex is correct for the current kernel.
+2. Degradation is LOUD: RESOLUTION_FAILED + notes array names the exact
+   failure mode + reviewer_required surfaces in `gc["generation"]`.
+3. Extending the regex to named-`.data` is a one-line addition when needed,
+   with no architectural change — it is a regex bug fix, not a design decision.
+
+### Status
+
+**Accepted known limitation.** Monitor kernel upstream for `.data = (void *)`
+migration in `sound/soc/qcom/*.c`. If detected, extend `_MATCH_ENTRY_DATA_RE`
+with an alternation and add a fixture test.
 

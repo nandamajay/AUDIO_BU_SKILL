@@ -161,6 +161,115 @@ class TestByteIdentity:
         assert r_with.bytes_ == r_without.bytes_
 
 
+# ── Template override effectiveness tests ─────────────────────────────────────
+
+
+class TestTemplateOverrideEffective:
+    """Prove template values OVERRIDE hardcoded constants when ATTESTED.
+
+    Distinguishes "wired and effective" from "wired but inert".
+    """
+
+    @staticmethod
+    def _attested_template():
+        """Synthetic template with ATTESTED board_variant and pinctrl_state."""
+        return {
+            "board_metadata": {
+                "board_variant": {
+                    "value": "SYNTH-EVK-2.0",
+                    "ncc_state": "ATTESTED",
+                    "authority": {"strength": "MODERATE", "origin": "synthetic-test"},
+                },
+                "pinctrl_state": {
+                    "value": "i2s3_active",
+                    "ncc_state": "ATTESTED",
+                    "authority": {"strength": "MODERATE", "origin": "synthetic-test"},
+                },
+            }
+        }
+
+    def test_attested_model_overrides_fixme_literal(self):
+        """ATTESTED board_variant → emitted model= differs from hardcoded FIXME.
+
+        NOT real-target — SYNTHETIC fixture.
+        """
+        facts = _clean_nord_facts()
+        template = self._attested_template()
+
+        result = generate_machine_driver(facts, template=template)
+        assert isinstance(result, GeneratedArtifact)
+
+        output = result.bytes_.decode("utf-8")
+        # Template value present in output
+        assert 'model = "SYNTH-EVK-2.0"' in output
+        # Hardcoded FIXME absent
+        assert "FIXME(board_variant): NOT_ATTESTED" not in output
+
+    def test_attested_pinctrl_overrides_hardcoded_label(self):
+        """ATTESTED pinctrl_state → emitted pinctrl-0 uses template value.
+
+        NOT real-target — SYNTHETIC fixture.
+        """
+        facts = _clean_nord_facts()
+        template = self._attested_template()
+
+        result = generate_machine_driver(facts, template=template)
+        assert isinstance(result, GeneratedArtifact)
+
+        output = result.bytes_.decode("utf-8")
+        # Template value present
+        assert "<&i2s3_active>" in output
+        # Hardcoded i2s8_active absent from pinctrl-0 line
+        assert "pinctrl-0 = <&i2s8_active>" not in output
+
+    def test_attested_template_differs_from_fixture(self):
+        """ATTESTED template produces DIFFERENT bytes than the Nord fixture.
+
+        Proves template override is EFFECTIVE — not inert.
+        NOT real-target — SYNTHETIC fixture.
+        """
+        facts = _clean_nord_facts()
+        template = self._attested_template()
+
+        result = generate_machine_driver(facts, template=template)
+        assert isinstance(result, GeneratedArtifact)
+
+        expected_fixture = _EXPECTED_DTSI.read_bytes()
+        assert result.bytes_ != expected_fixture, (
+            "ATTESTED template should produce DIFFERENT bytes than the "
+            "hardcoded-constant fixture — override is not effective"
+        )
+
+    def test_not_attested_falls_back_to_constant(self):
+        """NOT_ATTESTED board_variant → falls back to hardcoded FIXME literal.
+
+        Paired with test_attested_model_overrides_fixme_literal to prove
+        both paths work. NOT real-target — SYNTHETIC fixture.
+        """
+        facts = _clean_nord_facts()
+        template = {
+            "board_metadata": {
+                "board_variant": {
+                    "value": None,
+                    "ncc_state": "NOT_ATTESTED",
+                    "authority": {"strength": "UNAVAILABLE", "origin": "none"},
+                },
+                "pinctrl_state": {
+                    "value": None,
+                    "ncc_state": "NOT_ATTESTED",
+                    "authority": {"strength": "UNAVAILABLE", "origin": "none"},
+                },
+            }
+        }
+
+        result = generate_machine_driver(facts, template=template)
+        assert isinstance(result, GeneratedArtifact)
+
+        # Falls back to fixture (byte-identity)
+        expected_fixture = _EXPECTED_DTSI.read_bytes()
+        assert result.bytes_ == expected_fixture
+
+
 # ── _template_value helper tests ─────────────────────────────────────────────
 
 
