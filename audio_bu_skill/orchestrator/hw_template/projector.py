@@ -1094,6 +1094,52 @@ def _resolve_codec_entry(
     )
 
 
+# ── curated-override file loading (WP_SCHEMATIC_ATTESTED_DESIGN §6 step 3) ────
+
+
+def load_curated_overrides(
+    path: str | Path, *, required: bool
+) -> dict[str, Any] | None:
+    """Load a ``curated_overrides.json`` file for a target.
+
+    This is the single loader shared by every onboarding-time write site
+    (the projector ``_cli`` and the H-1 validation harness) so that the
+    file-handling contract is identical everywhere:
+
+      * **Missing file** — honest degradation. If ``required`` is False
+        (convention-driven auto-load: ``targets/<t>/curated_overrides.json``
+        may simply not exist for an un-curated target) return ``None`` so the
+        projector runs inert and every schematic leaf stays NOT_ATTESTED. If
+        ``required`` is True (an explicit ``--curated-overrides PATH`` was
+        given), a missing file is a loud :class:`FileNotFoundError` — the
+        caller asked for a specific file and it is not there.
+      * **Malformed JSON / non-object** — always a loud :class:`ValueError`,
+        regardless of ``required``. A curated file that exists but cannot be
+        parsed is never silently ignored: silence there would drop a human's
+        attested schematic facts without a trace.
+
+    The returned dict is NOT validated here — validation is
+    :func:`_validate_curated_overrides`, invoked inside :func:`project`. This
+    function only turns bytes-on-disk into the ``dict | None`` that
+    ``project(curated_overrides=...)`` expects.
+    """
+    p = Path(path)
+    if not p.is_file():
+        if required:
+            raise FileNotFoundError(f"curated overrides file not found: {p}")
+        return None
+    try:
+        loaded = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"malformed curated overrides file {p}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            f"curated overrides file {p} must contain a JSON object, "
+            f"got {type(loaded).__name__}"
+        )
+    return loaded
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 
@@ -1119,6 +1165,16 @@ def _cli(argv: list[str] | None = None) -> int:
         help="Directory to write audio_hardware_template.json + "
              "gap_manifest.json into.",
     )
+    parser.add_argument(
+        "--curated-overrides",
+        default=None,
+        help="Optional path to a curated_overrides.json file "
+             "(schematic-attested / reviewer-curated gap-fills). If given, the "
+             "file MUST exist and be valid JSON — a missing or malformed file "
+             "is a loud error. Overrides are applied gap-fill-only to "
+             "NOT_ATTESTED leaves; they never overwrite attested values and "
+             "never reach cross_verification.",
+    )
     args = parser.parse_args(argv)
 
     gc = json.loads(Path(args.gc_json).read_text(encoding="utf-8"))
@@ -1126,8 +1182,25 @@ def _cli(argv: list[str] | None = None) -> int:
         print(f"error: {args.gc_json} does not contain a JSON object", file=sys.stderr)
         return 2
 
+    # An explicit --curated-overrides PATH means the file is REQUIRED: a
+    # missing/malformed file is loud (never silently dropped).
     try:
-        result = project(gc, target_name=args.target, run_id=args.run_id)
+        curated = (
+            load_curated_overrides(args.curated_overrides, required=True)
+            if args.curated_overrides is not None
+            else None
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        result = project(
+            gc,
+            target_name=args.target,
+            run_id=args.run_id,
+            curated_overrides=curated,
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

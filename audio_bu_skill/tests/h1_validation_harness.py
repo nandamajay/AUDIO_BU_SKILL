@@ -40,7 +40,11 @@ _AUDIO_BU_SKILL = _HERE.parent.parent
 if str(_AUDIO_BU_SKILL) not in sys.path:
     sys.path.insert(0, str(_AUDIO_BU_SKILL))
 
-from orchestrator.hw_template.projector import project, write_outputs  # noqa: E402
+from orchestrator.hw_template.projector import (  # noqa: E402
+    load_curated_overrides,
+    project,
+    write_outputs,
+)
 
 
 def _load_json(path: Path) -> dict:
@@ -82,7 +86,19 @@ def _run_real_target(target_name: str, target_dir: Path) -> dict:
         }
     analysis = _load_json(analysis_path)
     gc = _synthesise_gc_from_analysis(analysis)
-    result = project(gc, target_name=target_name, run_id=f"h1-validation-{target_name}")
+    # WP_SCHEMATIC_ATTESTED_DESIGN §6 step 3: this is the live onboarding-time
+    # write site. Auto-load targets/<t>/curated_overrides.json BY CONVENTION —
+    # absent file → None (inert, un-curated target); malformed → loud. Nord has
+    # no such file today, so this is a no-op there (byte-identity preserved).
+    curated = load_curated_overrides(
+        target_dir / "curated_overrides.json", required=False
+    )
+    result = project(
+        gc,
+        target_name=target_name,
+        run_id=f"h1-validation-{target_name}",
+        curated_overrides=curated,
+    )
     out_dir = target_dir / "h1_validation"
     write_outputs(result, out_dir)
     return {
