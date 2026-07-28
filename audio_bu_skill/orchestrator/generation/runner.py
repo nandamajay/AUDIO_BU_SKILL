@@ -196,6 +196,8 @@ def _run_generation(
         try:
             if artifact_class == "machine_driver":
                 result: GenerationResult = func(facts, source=probe, template=template)  # type: ignore[call-arg]
+            elif artifact_class == "dt_scaffolding":
+                result = func(facts, template=template)  # type: ignore[call-arg]
             else:
                 result = func(facts)  # type: ignore[call-arg]
         except Exception as exc:  # noqa: BLE001 — failure isolation per §WP10(h)

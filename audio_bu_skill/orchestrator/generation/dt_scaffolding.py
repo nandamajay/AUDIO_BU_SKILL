@@ -153,6 +153,35 @@ _GATING_ROW_NAMES: tuple[str, ...] = (
     "T5.dts.compatible",
 )
 
+#: Hardcoded pinctrl state label — used as fallback when the H-1 template
+#: does not provide an ATTESTED pinctrl_state value.
+_PINCTRL_STATE_LABEL: str = "i2s8_active"
+_PINCTRL_STATE_NODE_NAME: str = "i2s8-active-state"
+
+
+def _template_value(template: dict | None, *key_path: str) -> object | None:
+    """Extract an attested leaf value from the H-1 template dict.
+
+    Mirrors ``machine_driver._template_value`` — kept as a local copy to
+    avoid cross-lane imports. Returns ``value`` only when
+    ``ncc_state == "ATTESTED"`` and ``value is not None``.
+    """
+    if template is None:
+        return None
+    node: object = template
+    for key in key_path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+        if node is None:
+            return None
+    if not isinstance(node, dict):
+        return None
+    if node.get("ncc_state") != "ATTESTED":
+        return None
+    val = node.get("value")
+    return val if val is not None else None
+
 
 @register_generator(
     "dt_scaffolding",
@@ -163,7 +192,11 @@ _GATING_ROW_NAMES: tuple[str, ...] = (
         ("T5", "dts.compatible"),
     ),
 )
-def generate_dt(facts: TrustedFacts, kb: object | None = None) -> GenerationResult:
+def generate_dt(
+    facts: TrustedFacts,
+    kb: object | None = None,
+    template: dict | None = None,
+) -> GenerationResult:
     """Emit a DT scaffolding artifact or a skipped verdict for one target.
 
     Pure, deterministic, zero I/O. Byte-identical ``facts.to_dict()`` produces
@@ -277,10 +310,15 @@ def generate_dt(facts: TrustedFacts, kb: object | None = None) -> GenerationResu
     lines.append(" */")
     lines.append("")
 
-    # Pinmux state node under &tlmm: fixed frame ``i2s8_active`` with one
-    # sub-node per pin in _REQUIRED_I2S_PINS order.
+    # Pinmux state node under &tlmm. Label derived from H-1 template when
+    # ATTESTED, falling back to the hardcoded Nord constant otherwise.
+    _pinctrl_label = (
+        _template_value(template, "board_metadata", "pinctrl_state")
+        or _PINCTRL_STATE_LABEL
+    )
+    _pinctrl_node = _pinctrl_label.replace("_", "-") + "-state"
     lines.append("&tlmm {")
-    lines.append("\ti2s8_active: i2s8-active-state {")
+    lines.append(f"\t{_pinctrl_label}: {_pinctrl_node} {{")
 
     # Emit pin sub-nodes in fixed order. Missing pins get a FIXME sub-node
     # placeholder AND a partial-artifact contributes_rows entry. Blank line
