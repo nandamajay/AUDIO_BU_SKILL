@@ -951,10 +951,41 @@ def _codec_identity(entry: dict[str, Any]) -> str | None:
     return pn.value if pn.value is not None else pn.candidate_value
 
 
+def _is_placeholder_entry(entry: Any) -> bool:
+    """True when ``entry`` is a SCHEMA-ONLY placeholder ("not yet curated").
+
+    A placeholder is a dict with ``value`` null (or absent) AND **no**
+    ``authority`` and **no** ``attestation`` block — the shape a human writes
+    into a skeleton ``curated_overrides.json`` before filling in a real cited
+    value (WP_SCHEMATIC_ATTESTED_DESIGN.md §6 step 5). It carries no claim, so
+    it is treated as un-curated: skipped at both validation and apply, never
+    promoting its leaf to ATTESTED.
+
+    This is deliberately NARROW so it never masks a genuinely-malformed
+    attestation: a ``value:null`` entry that DOES carry an ``authority`` or
+    ``attestation`` block is NOT a placeholder — it is a null value paired with
+    a claim, which stays a loud ValueError (see ``test_null_value_raises``).
+    """
+    if not isinstance(entry, dict):
+        return False
+    return (
+        entry.get("value") is None
+        and "authority" not in entry
+        and "attestation" not in entry
+    )
+
+
 def _validate_curated_overrides(
     overrides: dict[str, Any], target_name: str
 ) -> None:
-    """Validate curated_overrides schema. Raises ValueError on any violation."""
+    """Validate curated_overrides schema. Raises ValueError on any violation.
+
+    SCHEMA-ONLY placeholder entries (:func:`_is_placeholder_entry` — value null,
+    no authority, no attestation) pass validation as "not yet curated": their
+    path legality is STILL enforced (a typo'd path in a skeleton is still a loud
+    error), but the concrete-value / authority / attestation requirements are
+    skipped because the entry makes no claim.
+    """
     if not isinstance(overrides, dict):
         raise ValueError(
             f"curated_overrides must be a dict, got {type(overrides).__name__}"
@@ -972,6 +1003,10 @@ def _validate_curated_overrides(
                 f"curated_overrides[{path!r}]: entry must be a dict, "
                 f"got {type(entry).__name__}"
             )
+        if _is_placeholder_entry(entry):
+            # Un-curated skeleton slot — path already proven legal above. Makes
+            # no claim, so the value/authority/attestation checks do not apply.
+            continue
         if entry.get("value") is None:
             raise ValueError(
                 f"curated_overrides[{path!r}]: null value is not allowed "
@@ -1038,6 +1073,14 @@ def _apply_curated_overrides(
     the construction anyway — this guard refuses it earlier and explicitly).
     """
     for path, entry in overrides.items():
+        if _is_placeholder_entry(entry):
+            # Un-curated skeleton slot: no claim to apply. Skipped BEFORE any
+            # codec-identity resolution so a placeholder never forces
+            # _resolve_codec_entry to raise on a target whose codec identities
+            # are still null (e.g. Nord). The leaf stays NOT_ATTESTED → the
+            # generation consumer's _template_value returns None → hardcoded
+            # fallback fires → byte-identity preserved.
+            continue
         kind = _curated_path_kind(path)
         parts = path.split(".")
 

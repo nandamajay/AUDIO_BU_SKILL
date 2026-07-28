@@ -180,9 +180,17 @@ def test_nord_template_byte_identical_to_committed_fixture():
     """Regenerate the real Nord template through the exact harness path and prove
     it is BYTE-identical to the committed audio_hardware_template.json.
 
-    Nord ships no curated_overrides.json -> every schematic leaf stays
-    attestation=None -> the new key is omitted everywhere -> zero drift.
+    Step 5 (WP_SCHEMATIC_ATTESTED_DESIGN §6) ships a SCHEMA-ONLY skeleton at
+    ``targets/nord-iq10/curated_overrides.json``: the six schematic leaves,
+    value=null, no authority / no attestation. Every entry is a PLACEHOLDER, so
+    the validate+apply path skips them as "not yet curated" -> every schematic
+    leaf stays attestation=None -> the persisted key is omitted everywhere ->
+    zero drift. This test now feeds that real skeleton through the projector and
+    STILL proves byte-identity — the stronger guarantee that shipping the
+    skeleton is a no-op on the emitted template.
     """
+    from orchestrator.hw_template.projector import _is_placeholder_entry
+
     analysis = json.loads((_NORD_DIR / "qgenie_analysis.json").read_text("utf-8"))
     gc = {
         "soc": analysis.get("soc"),
@@ -199,7 +207,12 @@ def test_nord_template_byte_identical_to_committed_fixture():
         },
     }
     curated = load_curated_overrides(_NORD_DIR / "curated_overrides.json", required=False)
-    assert curated is None, "Nord must have NO curated file for byte-identity to hold"
+    # Nord ships the step-5 skeleton: a non-empty dict of PLACEHOLDERS ONLY.
+    # Byte-identity holds precisely because every entry is skipped as un-curated.
+    assert isinstance(curated, dict) and curated, "Nord must ship the step-5 skeleton"
+    assert all(_is_placeholder_entry(e) for e in curated.values()), (
+        "every skeleton entry must be a placeholder for byte-identity to hold"
+    )
 
     result = project(
         gc, target_name="nord-iq10", run_id="h1-validation-nord-iq10",

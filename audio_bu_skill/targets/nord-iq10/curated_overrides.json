@@ -1,0 +1,26 @@
+{
+  "board_metadata.mclk": {
+    "value": null,
+    "_fill": "SCHEMA-ONLY PLACEHOLDER — not yet curated. To curate: replace value with the concrete MCLK source read off the schematic, then add an authority block {\"strength\": \"KB_RULE\", \"origin\": \"schematic\"} and an attestation block {\"attested_by\": \"<you>@oss.qualcomm.com\", \"timestamp\": \"<ISO-8601>\", \"evidence\": \"<schematic sheet ref>\", \"target\": \"nord-iq10\"}. Until then this entry is skipped as un-curated and the generator uses its hardcoded fallback. Do NOT invent a value or a citation."
+  },
+  "board_metadata.global_md_oe": {
+    "value": null,
+    "_fill": "SCHEMA-ONLY PLACEHOLDER — not yet curated. Fill value with the global MD output-enable read off the schematic, plus authority (origin=schematic) + attestation (evidence=<sheet ref>, target=nord-iq10). Skipped until then. Do NOT invent a value or a citation."
+  },
+  "board_metadata.scmi_index": {
+    "value": null,
+    "_fill": "SCHEMA-ONLY PLACEHOLDER — not yet curated. Fill value with the SCMI clock/power index read off the schematic, plus authority (origin=schematic) + attestation (evidence=<sheet ref>, target=nord-iq10). Skipped until then. Do NOT invent a value or a citation."
+  },
+  "codecs.adau1979.i2c_bus_label": {
+    "value": null,
+    "_fill": "SCHEMA-ONLY PLACEHOLDER — not yet curated. Fill value with the I2C control-bus DT label (e.g. &i2c18) read off the schematic, plus authority (origin=schematic) + attestation (evidence=<sheet ref>, target=nord-iq10). Skipped until then. Codec key is the candidate part_number identity. Add matching codecs.pcm1681.* entries when curating the secondary codec. Do NOT invent a value or a citation."
+  },
+  "codecs.adau1979.i2c_address": {
+    "value": null,
+    "_fill": "SCHEMA-ONLY PLACEHOLDER — not yet curated. Fill value with the 7-bit I2C address (e.g. 0x31) read off the schematic, plus authority (origin=schematic) + attestation (evidence=<sheet ref>, target=nord-iq10). Until then 0x31 stays a hardcoded candidate-derived fallback. Do NOT invent a value or a citation."
+  },
+  "codecs.adau1979.reset_gpios": {
+    "value": null,
+    "_fill": "SCHEMA-ONLY PLACEHOLDER — not yet curated. Fill value with the reset GPIO read off the schematic, plus authority (origin=schematic) + attestation (evidence=<sheet ref>, target=nord-iq10). Skipped until then. Do NOT invent a value or a citation."
+  }
+}

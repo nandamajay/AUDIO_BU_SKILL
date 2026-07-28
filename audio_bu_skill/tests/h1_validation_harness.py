@@ -86,10 +86,12 @@ def _run_real_target(target_name: str, target_dir: Path) -> dict:
         }
     analysis = _load_json(analysis_path)
     gc = _synthesise_gc_from_analysis(analysis)
-    # WP_SCHEMATIC_ATTESTED_DESIGN §6 step 3: this is the live onboarding-time
+    # WP_SCHEMATIC_ATTESTED_DESIGN §6 step 3/5: this is the live onboarding-time
     # write site. Auto-load targets/<t>/curated_overrides.json BY CONVENTION —
-    # absent file → None (inert, un-curated target); malformed → loud. Nord has
-    # no such file today, so this is a no-op there (byte-identity preserved).
+    # absent file → None (inert, un-curated target); malformed → loud. Nord ships
+    # a SCHEMA-ONLY skeleton (six schematic leaves, value=null, no attestation):
+    # every entry is a placeholder → skipped as un-curated → byte-identity
+    # preserved until a human fills a leaf with a real cited value.
     curated = load_curated_overrides(
         target_dir / "curated_overrides.json", required=False
     )
