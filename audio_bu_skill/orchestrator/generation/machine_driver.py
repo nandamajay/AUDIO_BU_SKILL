@@ -241,6 +241,25 @@ def _template_value(template: dict | None, *key_path: str) -> object | None:
     return val if val is not None else None
 
 
+def _template_origin(template: dict | None, *key_path: str) -> str | None:
+    """Extract authority.origin from a template leaf, or None."""
+    if template is None:
+        return None
+    node: object = template
+    for key in key_path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+        if node is None:
+            return None
+    if not isinstance(node, dict):
+        return None
+    auth = node.get("authority")
+    if not isinstance(auth, dict):
+        return None
+    return auth.get("origin")
+
+
 # ── Disclosure-note builders (source-grounded, byte-invariant) ──────────────
 #
 # These build the TEXT of the contributes_rows notes only. They never touch the
@@ -573,36 +592,68 @@ def generate_machine_driver(
     lines.append("\t};")
     lines.append("};")
 
-    # Board-variant NOT_ATTESTED partial-artifact row (WP-69, decision A). The
-    # emitted `model =` property is the verbatim FIXME literal because no
-    # independent authority attests the board variant name; the prior
-    # "IQ10-EVK" value traced to candidate commit `5267b2e1` and fails the
-    # provenance guard. Mirrors the sound_card.driver_match row shape.
-    contributes_rows.append(
-        VerificationRow(
-            track="T5",
-            subject=_BOARD_VARIANT_CONTRIB_SUBJECT,
-            verdict="NOT_CROSS_CHECKABLE",
-            coverage_gap_reason="authority_out_of_scope",
-            notes=[
-                "machine_driver: sound-card `model` field emitted as verbatim "
-                f"FIXME literal {_MODEL_FIXME_LITERAL!r} because no independent "
-                "authority attests the board variant name.",
-                "SCOPE: board-variant name (the string that populates `model =`).",
-                "NOT_ATTESTED: board_variant. reviewer_required=true.",
-                "Candidates present in evidence: (a) IQ10-EVK — appears only in "
-                "candidate DTS at commit 5267b2e1d7a5 and downstream records; "
-                "fails provenance guard. (b) IQ10-RRD — attested by schematic "
-                "PDFs LD20-94440/94441 and IQ10_RRD_IO_Mapping.xlsx in "
-                "audio_bu_skill/targets/nord-iq10/evidence/offline/, but no "
-                "ingestion pipeline exists to promote schematic evidence into "
-                "an authority row.",
-                "Reviewer must edit `model =` before bring-up. Follow-up "
-                "authority track queued behind WP_H-1_AUDIO_HARDWARE_TEMPLATE_"
-                "PROJECTOR (task #70) and a later board-metadata authority WP.",
-            ],
+    # Board-variant contributes_row (WP-69). Content varies by provenance:
+    #   - reviewer_curated → ATTESTED via curation (visual tag)
+    #   - automation (ipcat_swi, etc) → ATTESTED via automation
+    #   - FIXME literal (no template value) → NOT_CROSS_CHECKABLE (legacy)
+    _bv_origin = _template_origin(template, "board_metadata", "board_variant")
+    if _bv_origin == "reviewer_curated":
+        contributes_rows.append(
+            VerificationRow(
+                track="T5",
+                subject=_BOARD_VARIANT_CONTRIB_SUBJECT,
+                verdict="NOT_CROSS_CHECKABLE",
+                coverage_gap_reason="authority_out_of_scope",
+                notes=[
+                    f"machine_driver: sound-card `model` field emitted as "
+                    f"{eff_model!r} — HUMAN-ATTESTED (reviewer_curated).",
+                    "SCOPE: board-variant name (the string that populates `model =`).",
+                    "ATTESTED via curated override (G-3A.15 gap-fill). "
+                    "origin=reviewer_curated.",
+                ],
+            )
         )
-    )
+    elif eff_model != _MODEL_FIXME_LITERAL:
+        contributes_rows.append(
+            VerificationRow(
+                track="T5",
+                subject=_BOARD_VARIANT_CONTRIB_SUBJECT,
+                verdict="NOT_CROSS_CHECKABLE",
+                coverage_gap_reason="authority_out_of_scope",
+                notes=[
+                    f"machine_driver: sound-card `model` field emitted as "
+                    f"{eff_model!r} — attested via automation "
+                    f"(origin={_bv_origin!r}).",
+                    "SCOPE: board-variant name (the string that populates `model =`).",
+                ],
+            )
+        )
+    else:
+        contributes_rows.append(
+            VerificationRow(
+                track="T5",
+                subject=_BOARD_VARIANT_CONTRIB_SUBJECT,
+                verdict="NOT_CROSS_CHECKABLE",
+                coverage_gap_reason="authority_out_of_scope",
+                notes=[
+                    "machine_driver: sound-card `model` field emitted as verbatim "
+                    f"FIXME literal {_MODEL_FIXME_LITERAL!r} because no independent "
+                    "authority attests the board variant name.",
+                    "SCOPE: board-variant name (the string that populates `model =`).",
+                    "NOT_ATTESTED: board_variant. reviewer_required=true.",
+                    "Candidates present in evidence: (a) IQ10-EVK — appears only in "
+                    "candidate DTS at commit 5267b2e1d7a5 and downstream records; "
+                    "fails provenance guard. (b) IQ10-RRD — attested by schematic "
+                    "PDFs LD20-94440/94441 and IQ10_RRD_IO_Mapping.xlsx in "
+                    "audio_bu_skill/targets/nord-iq10/evidence/offline/, but no "
+                    "ingestion pipeline exists to promote schematic evidence into "
+                    "an authority row.",
+                    "Reviewer must edit `model =` before bring-up. Follow-up "
+                    "authority track queued behind WP_H-1_AUDIO_HARDWARE_TEMPLATE_"
+                    "PROJECTOR (task #70) and a later board-metadata authority WP.",
+                ],
+            )
+        )
 
     # Driver-match partial-artifact row (decision A): the board-specific
     # compatible has no upstream driver match yet. The "not in the match table"
