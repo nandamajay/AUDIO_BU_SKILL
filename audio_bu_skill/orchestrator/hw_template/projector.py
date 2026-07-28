@@ -96,6 +96,7 @@ def project(
     run_id: str,
     *,
     allow_fixture_citations: bool | None = None,
+    curated_overrides: dict[str, Any] | None = None,
 ) -> ProjectionResult:
     """Project ``gc`` into a hardware template + gap manifest.
 
@@ -117,6 +118,13 @@ def project(
         such a citation is seen, raises :class:`ValueError`. If
         ``None`` (default), reads the :envvar:`H1_VALIDATION_ALLOWS_FIXTURES`
         environment variable.
+    curated_overrides :
+        Optional dict of curated human-authority overrides (G-3A.15).
+        Schema: ``{"<template_path>": {FactRecord-shaped payload}}``.
+        Each entry is validated at load time and applied ONLY to
+        NOT_ATTESTED facts (gap-fill). If ``None`` (default), no
+        curation is applied — the projector is inert with respect to
+        this feature.
 
     Returns
     -------
@@ -128,7 +136,8 @@ def project(
     ------
     ValueError
         If a fixture citation is encountered without the fixture flag
-        set, or if the row list is malformed.
+        set, if the row list is malformed, or if curated_overrides
+        fails schema validation.
     """
     if allow_fixture_citations is None:
         allow_fixture_citations = os.environ.get(_FIXTURE_ENV_FLAG) == "1"
@@ -180,6 +189,11 @@ def project(
         clocks=clocks,
         audio_links=audio_links,
     )
+
+    # ── Apply curated overrides (G-3A.15, gap-fill only) ──────────────
+    if curated_overrides is not None:
+        _validate_curated_overrides(curated_overrides, target_name)
+        _apply_curated_overrides(template, curated_overrides)
 
     gap_manifest = GapManifest(
         target_name=target_name,
@@ -816,6 +830,123 @@ def _enforce_fixture_discipline(
                         "a synthetic fixture as if it were an onboarded target."
                     )
                 return  # First hit is enough — flag check is global.
+
+
+# ── Curated overrides (G-3A.15) ──────────────────────────────────────────
+
+# Legal template paths that curated overrides may target.
+_CURATED_LEGAL_PATHS: frozenset[str] = frozenset({
+    "board_metadata.soc",
+    "board_metadata.board_variant",
+    "board_metadata.pinctrl_state",
+})
+
+from orchestrator.reasoning.crossverify_model import AUTHORITY_STRENGTHS  # noqa: E402
+
+
+def _validate_curated_overrides(
+    overrides: dict[str, Any], target_name: str
+) -> None:
+    """Validate curated_overrides schema. Raises ValueError on any violation."""
+    if not isinstance(overrides, dict):
+        raise ValueError(
+            f"curated_overrides must be a dict, got {type(overrides).__name__}"
+        )
+    for path, entry in overrides.items():
+        if path not in _CURATED_LEGAL_PATHS:
+            raise ValueError(
+                f"curated_overrides: illegal template path {path!r}; "
+                f"legal paths are: {sorted(_CURATED_LEGAL_PATHS)}"
+            )
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"curated_overrides[{path!r}]: entry must be a dict, "
+                f"got {type(entry).__name__}"
+            )
+        if entry.get("value") is None:
+            raise ValueError(
+                f"curated_overrides[{path!r}]: null value is not allowed "
+                "(a curated override must provide a concrete value)"
+            )
+        authority = entry.get("authority")
+        if not isinstance(authority, dict):
+            raise ValueError(
+                f"curated_overrides[{path!r}]: authority must be a dict"
+            )
+        strength = authority.get("strength")
+        if strength not in AUTHORITY_STRENGTHS:
+            raise ValueError(
+                f"curated_overrides[{path!r}]: illegal authority.strength "
+                f"{strength!r}; expected one of {sorted(AUTHORITY_STRENGTHS)}"
+            )
+        if authority.get("origin") != "reviewer_curated":
+            raise ValueError(
+                f"curated_overrides[{path!r}]: authority.origin must be "
+                f"'reviewer_curated', got {authority.get('origin')!r}"
+            )
+        attestation = entry.get("attestation")
+        if not isinstance(attestation, dict):
+            raise ValueError(
+                f"curated_overrides[{path!r}]: attestation must be a dict"
+            )
+        if not attestation.get("attested_by"):
+            raise ValueError(
+                f"curated_overrides[{path!r}]: attestation.attested_by is required"
+            )
+        if not attestation.get("timestamp"):
+            raise ValueError(
+                f"curated_overrides[{path!r}]: attestation.timestamp is required"
+            )
+        if not attestation.get("evidence"):
+            raise ValueError(
+                f"curated_overrides[{path!r}]: attestation.evidence is required"
+            )
+        att_target = attestation.get("target")
+        if att_target != target_name:
+            raise ValueError(
+                f"curated_overrides[{path!r}]: attestation.target is "
+                f"{att_target!r} but projector target_name is {target_name!r}"
+            )
+
+
+def _apply_curated_overrides(
+    template: AudioHardwareTemplate, overrides: dict[str, Any]
+) -> None:
+    """Apply validated curated overrides to NOT_ATTESTED template facts (gap-fill).
+
+    Only replaces a FactRecord if its current ncc_state is NOT_ATTESTED.
+    ATTESTED facts (from automation) are NOT overridden — Slice 3 handles
+    agreement/contradiction logic.
+    """
+    for path, entry in overrides.items():
+        parts = path.split(".")
+        if len(parts) != 2:
+            continue
+        group_name, field_name = parts
+
+        if group_name == "board_metadata":
+            group = template.board_metadata
+        else:
+            continue
+
+        existing = group.get(field_name)
+        if not isinstance(existing, FactRecord):
+            continue
+        if existing.ncc_state != "NOT_ATTESTED":
+            continue
+
+        curated_fact = FactRecord(
+            value=entry["value"],
+            authority=dict(entry["authority"]),
+            citations=list(entry.get("citations") or []),
+            row_ref=None,
+            independently_verified=False,
+            candidate_derived=False,
+            candidate_value=None,
+            reviewer_required=False,
+            ncc_state="ATTESTED",
+        )
+        group[field_name] = curated_fact
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
