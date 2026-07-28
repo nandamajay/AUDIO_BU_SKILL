@@ -53,10 +53,10 @@
       "not_attested_disclosures": []
     },
     "mclk": {
-      "value": null,
+      "value": "12288000",
       "authority": {
-        "origin": "none",
-        "strength": "UNAVAILABLE"
+        "origin": "schematic",
+        "strength": "KB_RULE"
       },
       "citations": [],
       "row_ref": null,
@@ -64,8 +64,14 @@
       "candidate_derived": false,
       "candidate_value": null,
       "reviewer_required": false,
-      "ncc_state": "NOT_ATTESTED",
-      "not_attested_disclosures": []
+      "ncc_state": "ATTESTED",
+      "not_attested_disclosures": [],
+      "attestation": {
+        "attested_by": "ajay.nandam@oss.qualcomm.com",
+        "timestamp": "2026-07-28",
+        "evidence": "LD20-94440 Sheet 98 (GP99/GP100, 256x48kHz)",
+        "target": "nord-iq10"
+      }
     },
     "global_md_oe": {
       "value": null,
@@ -101,10 +107,10 @@
   "codecs": [
     {
       "part_number": {
-        "value": null,
+        "value": "pcm1681",
         "authority": {
-          "origin": "none",
-          "strength": "UNAVAILABLE"
+          "origin": "schematic",
+          "strength": "KB_RULE"
         },
         "citations": [],
         "row_ref": null,
@@ -112,8 +118,14 @@
         "candidate_derived": false,
         "candidate_value": null,
         "reviewer_required": false,
-        "ncc_state": "NOT_ATTESTED",
-        "not_attested_disclosures": []
+        "ncc_state": "ATTESTED",
+        "not_attested_disclosures": [],
+        "attestation": {
+          "attested_by": "ajay.nandam@oss.qualcomm.com",
+          "timestamp": "2026-07-28",
+          "evidence": "LD20-94440 Sheet 48",
+          "target": "nord-iq10"
+        }
       },
       "vendor": {
         "value": null,
@@ -161,10 +173,10 @@
         "not_attested_disclosures": []
       },
       "i2c_address": {
-        "value": null,
+        "value": "0x4c",
         "authority": {
-          "origin": "none",
-          "strength": "UNAVAILABLE"
+          "origin": "schematic",
+          "strength": "KB_RULE"
         },
         "citations": [],
         "row_ref": null,
@@ -172,8 +184,14 @@
         "candidate_derived": false,
         "candidate_value": null,
         "reviewer_required": false,
-        "ncc_state": "NOT_ATTESTED",
-        "not_attested_disclosures": []
+        "ncc_state": "ATTESTED",
+        "not_attested_disclosures": [],
+        "attestation": {
+          "attested_by": "ajay.nandam@oss.qualcomm.com",
+          "timestamp": "2026-07-28",
+          "evidence": "LD20-94440 Sheet 48 (MSEL->GND)",
+          "target": "nord-iq10"
+        }
       },
       "reset_gpios": {
         "value": null,
@@ -193,10 +211,10 @@
     },
     {
       "part_number": {
-        "value": null,
+        "value": "adau1979",
         "authority": {
-          "origin": "none",
-          "strength": "UNAVAILABLE"
+          "origin": "schematic",
+          "strength": "KB_RULE"
         },
         "citations": [],
         "row_ref": null,
@@ -204,8 +222,14 @@
         "candidate_derived": false,
         "candidate_value": null,
         "reviewer_required": false,
-        "ncc_state": "NOT_ATTESTED",
-        "not_attested_disclosures": []
+        "ncc_state": "ATTESTED",
+        "not_attested_disclosures": [],
+        "attestation": {
+          "attested_by": "ajay.nandam@oss.qualcomm.com",
+          "timestamp": "2026-07-28",
+          "evidence": "LD20-94440 Sheet 53",
+          "target": "nord-iq10"
+        }
       },
       "vendor": {
         "value": null,
@@ -253,10 +277,10 @@
         "not_attested_disclosures": []
       },
       "i2c_address": {
-        "value": null,
+        "value": "0x31",
         "authority": {
-          "origin": "none",
-          "strength": "UNAVAILABLE"
+          "origin": "schematic",
+          "strength": "KB_RULE"
         },
         "citations": [],
         "row_ref": null,
@@ -264,8 +288,14 @@
         "candidate_derived": false,
         "candidate_value": null,
         "reviewer_required": false,
-        "ncc_state": "NOT_ATTESTED",
-        "not_attested_disclosures": []
+        "ncc_state": "ATTESTED",
+        "not_attested_disclosures": [],
+        "attestation": {
+          "attested_by": "ajay.nandam@oss.qualcomm.com",
+          "timestamp": "2026-07-28",
+          "evidence": "LD20-94440 Sheet 53 (ADDR0/1=GND)",
+          "target": "nord-iq10"
+        }
       },
       "reset_gpios": {
         "value": null,

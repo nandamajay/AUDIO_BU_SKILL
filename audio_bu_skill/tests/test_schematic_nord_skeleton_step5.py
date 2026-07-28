@@ -1,35 +1,43 @@
-"""WP_SCHEMATIC_ATTESTED_DESIGN.md §6 step 5 — Nord SCHEMA-ONLY placeholder skeleton.
+"""WP_SCHEMATIC_ATTESTED_DESIGN.md §6 step 5 + WP-CODEC-IDENTITY-ATTEST Part 2
+— Nord curated_overrides: mechanism (step 5) AND the first real human FILL.
 
 Step 4 (0083591) made ``codec_stub`` a CONSUMER of schematic-attested leaves.
-Step 5 is the LAST mechanism step: ship a SCHEMA-ONLY skeleton at
-``targets/nord-iq10/curated_overrides.json`` — the six schematic leaves present
-with ``value: null`` and NO authority / NO attestation, each carrying a ``_fill``
-human-fill marker. It is a TEMPLATE for a human, not curated data.
+Step 5 shipped ``targets/nord-iq10/curated_overrides.json`` as a SCHEMA-ONLY
+skeleton (six null placeholders). WP-CODEC-IDENTITY-ATTEST Part 2 then had a
+human (ajay.nandam) FILL five of those leaves from schematic LD20-94440:
+``board_metadata.mclk`` = 12288000 (Sheet 98), and — role-anchored — the two
+codec identities plus their I2C addresses (DAC->pcm1681@0x4c Sheet 48;
+ADC->adau1979@0x31 Sheet 53). The remaining leaves stay null placeholders.
 
-The tension this step resolves: ``_validate_curated_overrides`` raises on ANY
-``value: null`` entry, and the H-1 harness AUTO-LOADS
-``targets/<t>/curated_overrides.json``. A naive null skeleton would therefore
-crash Nord H-1 regeneration. Resolution (projector.py ``_is_placeholder_entry``):
-an entry with ``value`` null AND no ``authority`` AND no ``attestation`` is a
-PLACEHOLDER — path legality is still enforced, but it is skipped as "not yet
-curated" (no ATTESTED promotion). A ``value: null`` entry that DOES carry a
-claim (authority/attestation) is NOT a placeholder and stays a loud error
-(``test_g3a15_curated_firewall.test_null_value_raises`` is unchanged).
+So Nord is no longer a pure skeleton — it is PARTIALLY CURATED. This module
+pins BOTH halves: the placeholder mechanism (proven on SYNTHETIC data, so it
+does not depend on Nord's now-mutable file) and Nord's current filled state.
 
-Contract pinned here (each maps 1:1 to a step-5 non-negotiable):
+The tension the placeholder mechanism resolves: ``_validate_curated_overrides``
+raises on ANY ``value: null`` entry, and the H-1 harness AUTO-LOADS
+``targets/<t>/curated_overrides.json``. A naive null entry would therefore crash
+regeneration. Resolution (projector.py ``_is_placeholder_entry``): an entry with
+``value`` null AND no ``authority`` AND no ``attestation`` is a PLACEHOLDER —
+path legality is still enforced, but it is skipped as "not yet curated" (no
+ATTESTED promotion). A ``value: null`` entry that DOES carry a claim
+(authority/attestation) is NOT a placeholder and stays a loud error.
 
-  1. Nord + the committed SCHEMA-ONLY skeleton, driven through the REAL projector
-     + the REAL codec consumer → codec_stub bytes are BYTE-IDENTICAL to the
-     frozen ``nord_codec_stub_expected.c``. The placeholder must NOT flip any
-     leaf to ATTESTED. PROVEN, not asserted.
-  2. Placeholder (value=null, no claim) entries load cleanly (no raise) and are
-     treated as un-curated — every schematic leaf stays NOT_ATTESTED / value=null
-     in the projected template.
-  3. HANDOFF: a human LATER filling one entry with value + authority + attestation
-     → that leaf goes ATTESTED and the consumer emits the pinned disclosure
-     comment. Proven with a SYNTHETIC filled copy, NOT the committed skeleton.
-  4. The committed skeleton is well-formed: all six leaves present, all null, all
-     placeholders (no authority / no attestation), all six paths legal.
+Contract pinned here:
+
+  1. Nord's FILLED curation, driven through the REAL projector + the REAL codec
+     consumer → codec_stub emits BOTH addresses (0x31/0x4c) carrying the pinned
+     schematic-attested provenance comment. Nord's codec_stub bytes CHANGE from
+     the pre-fill baseline — the added provenance is the intended win — and are
+     byte-locked to ``nord_codec_stub_attested_expected.c``.
+  2. SYNTHETIC placeholder (value=null, no claim) entries load cleanly (no raise)
+     and stay NOT_ATTESTED / value=null — the mechanism, proven independent of
+     Nord's filled file.
+  3. HANDOFF: a human filling one entry with value + authority + attestation →
+     that leaf goes ATTESTED and the consumer emits the pinned disclosure comment
+     (proven with a SYNTHETIC filled copy).
+  4. Nord's curated_overrides is PARTIALLY CURATED: exactly five filled leaves
+     (value + KB_RULE/schematic authority + citing attestation) and six null
+     placeholders, all paths legal.
   5. A ``value: null`` entry that carries an attestation block is NOT a
      placeholder → stays loud (the existing firewall contract is intact).
 
@@ -63,7 +71,7 @@ from orchestrator.reasoning.crossverify_model import VerificationRow
 _FIXTURES = _REPO / "tests" / "fixtures" / "phase2b"
 _NORD_DIR = _REPO / "targets" / "nord-iq10"
 _SKELETON = _NORD_DIR / "curated_overrides.json"
-_EXPECTED_C = _FIXTURES / "nord_codec_stub_expected.c"
+_EXPECTED_ATTESTED_C = _FIXTURES / "nord_codec_stub_attested_expected.c"
 
 _SHEET = "Schematic LD20-94440 rev A, audio sheet"
 _PINNED_SUFFIX = ", NOT IPCAT-cross-verified"
@@ -128,35 +136,62 @@ def _load_skeleton() -> dict:
     return json.loads(_SKELETON.read_text(encoding="utf-8"))
 
 
-# ── 4. the committed skeleton is well-formed ─────────────────────────────────
+# ── 4. Nord's curated_overrides is partially curated (5 filled + 6 placeholder) ─
 
 
-def test_skeleton_is_well_formed_placeholder_set() -> None:
-    """The committed Nord skeleton has exactly the six schematic leaves, every
-    one a null placeholder with no authority / no attestation."""
-    assert _SKELETON.is_file(), f"missing committed skeleton: {_SKELETON!r}"
+def test_nord_overrides_is_partially_curated_set() -> None:
+    """Nord's curated_overrides is PARTIALLY CURATED: five schematic leaves are
+    filled (value + KB_RULE/schematic authority + citing attestation targeting
+    nord-iq10), the rest are null placeholders. Every path is legal and every
+    filled attestation carries a sheet citation (no invented value without a
+    cite)."""
+    assert _SKELETON.is_file(), f"missing committed overrides: {_SKELETON!r}"
     sk = _load_skeleton()
 
-    expected_paths = {
+    filled_paths = {
         "board_metadata.mclk",
+        "codecs.role:DAC.part_number",
+        "codecs.role:ADC.part_number",
+        "codecs.pcm1681.i2c_address",
+        "codecs.adau1979.i2c_address",
+    }
+    placeholder_paths = {
         "board_metadata.global_md_oe",
         "board_metadata.scmi_index",
+        "codecs.pcm1681.i2c_bus_label",
+        "codecs.pcm1681.reset_gpios",
         "codecs.adau1979.i2c_bus_label",
-        "codecs.adau1979.i2c_address",
         "codecs.adau1979.reset_gpios",
     }
-    assert set(sk) == expected_paths, (
-        f"skeleton paths drifted.\n  got: {sorted(sk)}\n  want: {sorted(expected_paths)}"
+    assert set(sk) == filled_paths | placeholder_paths, (
+        f"overrides paths drifted.\n  got: {sorted(sk)}\n"
+        f"  want: {sorted(filled_paths | placeholder_paths)}"
     )
-    for path, entry in sk.items():
-        assert entry.get("value") is None, f"{path}: value must be null (not curated)"
+
+    for path in filled_paths:
+        entry = sk[path]
+        assert entry.get("value") is not None, f"{path}: filled leaf must have a value"
+        assert not _is_placeholder_entry(entry), f"{path}: filled leaf is not a placeholder"
+        auth = entry.get("authority")
+        assert isinstance(auth, dict), f"{path}: filled leaf must carry authority"
+        assert auth.get("strength") == "KB_RULE", f"{path}: authority.strength"
+        assert auth.get("origin") == "schematic", f"{path}: authority.origin"
+        att = entry.get("attestation")
+        assert isinstance(att, dict), f"{path}: filled leaf must carry attestation"
+        assert att.get("evidence"), f"{path}: attestation must cite a sheet (no bare value)"
+        assert att.get("target") == "nord-iq10", f"{path}: attestation.target must be nord-iq10"
+        assert att.get("attested_by"), f"{path}: attestation.attested_by required"
+
+    for path in placeholder_paths:
+        entry = sk[path]
+        assert entry.get("value") is None, f"{path}: placeholder value must be null"
         assert "authority" not in entry, f"{path}: placeholder must carry NO authority"
         assert "attestation" not in entry, (
             f"{path}: placeholder must carry NO attestation (no invented citation)"
         )
         assert _is_placeholder_entry(entry), f"{path}: not recognised as placeholder"
         assert entry.get("_fill"), f"{path}: missing human-fill marker"
-    print("PASS: committed skeleton is a clean six-leaf null-placeholder set")
+    print("PASS: Nord overrides is a partially-curated set (5 filled + 6 placeholder)")
 
 
 def test_skeleton_loads_cleanly_via_convention_loader() -> None:
@@ -171,13 +206,20 @@ def test_skeleton_loads_cleanly_via_convention_loader() -> None:
 
 
 def test_placeholder_entries_do_not_promote_to_attested() -> None:
-    """Feeding the skeleton through the REAL projector (validate + apply) does
-    NOT raise and leaves every schematic leaf NOT_ATTESTED / value=null."""
-    sk = _load_skeleton()
-    # Re-key the codec paths onto the synthetic target's identities (its codecs
-    # ARE identity-resolvable, unlike Nord's null-identity codecs) so this test
-    # exercises the codec-path branch too, not just the board branch.
-    template = _project_synth(sk)
+    """Feeding a SYNTHETIC placeholder set (value=null, no claim) through the REAL
+    projector (validate + apply) does NOT raise and leaves every schematic leaf
+    NOT_ATTESTED / value=null. This exercises the placeholder mechanism on
+    synthetic identities — deliberately NOT Nord's now-partially-filled file,
+    whose attestations target nord-iq10 and would mismatch synth-t."""
+    synth_placeholders = {
+        "board_metadata.mclk": {"value": None, "_fill": "placeholder"},
+        "board_metadata.global_md_oe": {"value": None, "_fill": "placeholder"},
+        "board_metadata.scmi_index": {"value": None, "_fill": "placeholder"},
+        "codecs.adau1979.i2c_bus_label": {"value": None, "_fill": "placeholder"},
+        "codecs.adau1979.i2c_address": {"value": None, "_fill": "placeholder"},
+        "codecs.adau1979.reset_gpios": {"value": None, "_fill": "placeholder"},
+    }
+    template = _project_synth(synth_placeholders)
 
     bm = template["board_metadata"]
     for field in _SCHEMATIC_LEAVES:
@@ -218,14 +260,17 @@ def test_placeholder_never_raises_on_null_identity_codecs() -> None:
     print("PASS: codec placeholder skipped before identity resolution (no raise)")
 
 
-# ── 1. Nord byte-identity with the committed skeleton ────────────────────────
+# ── 1. Nord's FILLED curation → codec_stub emits provenance, byte-locked ─────
 
 
-def test_nord_codec_stub_byte_identical_with_skeleton() -> None:
-    """NON-NEGOTIABLE: the committed Nord template (regenerated with the skeleton
-    present is byte-identical to 0f81452, since every entry is a placeholder) fed
-    to the consumer → codec_stub bytes == frozen fixture. The skeleton contributes
-    NOTHING — fallbacks fire, zero drift."""
+def test_nord_codec_stub_emits_schematic_provenance_when_filled() -> None:
+    """NON-NEGOTIABLE (Part 2 win): Nord's FILLED template (mclk + both codec
+    identities + both I2C addresses ATTESTED, origin=schematic) fed to the
+    consumer → codec_stub emits BOTH addresses carrying the pinned
+    schematic-attested provenance comment, and is byte-locked to
+    ``nord_codec_stub_attested_expected.c``. The numeric addresses (0x31/0x4c)
+    are unchanged from the pre-fill baseline (the plain fixture) — the added
+    provenance comment is the intended, disclosure-only win."""
     facts = _rehydrate_wp2_fixture()
     nord_template = json.loads(
         (_NORD_DIR / "h1_validation" / "audio_hardware_template.json").read_text(
@@ -234,32 +279,46 @@ def test_nord_codec_stub_byte_identical_with_skeleton() -> None:
     )
     result = generate_codec_stub(facts, template=nord_template)
     assert isinstance(result, GeneratedArtifact)
-    assert result.contributes_rows == [], (
-        f"skeleton must not add rows on Nord, got: "
-        f"{[r.subject for r in result.contributes_rows]!r}"
+
+    text = result.bytes_.decode("utf-8")
+    # Both addresses now carry the pinned schematic-attested provenance comment.
+    assert "\t.addr = 0x31,  /* schematic-attested (" in text, (
+        "ADC (adau1979) address did not emit the schematic-attested comment"
     )
-    expected = _EXPECTED_C.read_bytes()
+    assert "\t.addr = 0x4c,  /* schematic-attested (" in text, (
+        "DAC (pcm1681) address did not emit the schematic-attested comment"
+    )
+    assert _PINNED_SUFFIX in text, "pinned NOT-IPCAT-cross-verified suffix absent"
+    # Disclosure-only: the schematic-attested comment must NOT claim IPCAT.
+    assert "IPCAT-cross-verified" not in text.replace(_PINNED_SUFFIX, ""), (
+        "codec_stub must never claim positive IPCAT cross-verification"
+    )
+
+    expected = _EXPECTED_ATTESTED_C.read_bytes()
     assert result.bytes_ == expected, (
-        "Nord codec_stub drifted with the skeleton present.\n"
+        "Nord codec_stub drifted from the attested fixture.\n"
         f"actual (first 400):   {result.bytes_[:400]!r}\n"
         f"expected (first 400): {expected[:400]!r}"
     )
-    print("PASS: Nord + skeleton == frozen codec_stub fixture (byte-identical)")
+    print("PASS: Nord filled codec_stub emits both provenance comments (byte-locked)")
 
 
-def test_nord_template_regenerates_identically_with_skeleton() -> None:
-    """Regenerating Nord's H-1 template WITH the committed skeleton (via the real
-    validate+apply path) reproduces the committed 0f81452 template byte-for-byte:
-    the placeholder skeleton is a no-op on the emitted template JSON.
+def test_nord_template_regenerates_filled_leaves_attested() -> None:
+    """Regenerating Nord's H-1 template WITH the committed curated_overrides (via
+    the real validate+apply path) reproduces the committed filled state: the five
+    filled leaves regenerate ATTESTED / origin=schematic, the null placeholders
+    stay NOT_ATTESTED / value=null, and the role->identity pairing is the
+    hardware-correct one (DAC->pcm1681@0x4c, ADC->adau1979@0x31).
 
-    This exercises the crux — a value=null file at the auto-loaded path must load
-    and apply cleanly, not crash H-1 regeneration."""
+    This exercises the crux — a partially-filled file at the auto-loaded path must
+    load and apply cleanly, promoting only the filled leaves, and it double-checks
+    the anchor->part pairing so a swapped anchor cannot silently attest the wrong
+    address to the wrong codec."""
     committed = (_NORD_DIR / "h1_validation" / "audio_hardware_template.json").read_text(
         encoding="utf-8"
     )
     committed_tpl = json.loads(committed)
 
-    # Rebuild the exact gc the harness synthesises, then re-project WITH skeleton.
     analysis_path = _NORD_DIR / "qgenie_analysis.json"
     if not analysis_path.is_file():
         pytest.skip("Nord qgenie_analysis.json absent in this checkout")
@@ -267,29 +326,58 @@ def test_nord_template_regenerates_identically_with_skeleton() -> None:
 
     analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
     gc = _synthesise_gc_from_analysis(analysis)
-    skeleton = load_curated_overrides(_SKELETON, required=False)
+    overrides = load_curated_overrides(_SKELETON, required=False)
 
     result = project(
         gc,
         target_name="nord-iq10",
         run_id="h1-validation-nord-iq10",
-        curated_overrides=skeleton,
+        curated_overrides=overrides,
     )
     regenerated = result.template.to_dict()
 
-    # Compare the schematic-leaf regions specifically (run_id/provenance may vary
-    # across the committed snapshot, so compare the hardware content, not metadata).
+    # board_metadata.mclk is filled → ATTESTED; siblings stay null placeholders.
+    mclk = regenerated["board_metadata"]["mclk"]
+    assert mclk["value"] == "12288000" and mclk["ncc_state"] == "ATTESTED"
+    assert mclk["authority"]["origin"] == "schematic"
+    for field in ("global_md_oe", "scmi_index"):
+        leaf = regenerated["board_metadata"][field]
+        assert leaf["value"] is None and leaf["ncc_state"] == "NOT_ATTESTED"
+
+    # Regeneration matches the committed snapshot leaf-for-leaf.
     assert regenerated["board_metadata"]["mclk"] == committed_tpl["board_metadata"]["mclk"]
     for field in _SCHEMATIC_LEAVES:
         assert (
             regenerated["board_metadata"][field]
             == committed_tpl["board_metadata"][field]
-        ), f"board_metadata.{field} drifted with skeleton"
+        ), f"board_metadata.{field} drifted"
     assert len(regenerated["codecs"]) == len(committed_tpl["codecs"])
     for got, want in zip(regenerated["codecs"], committed_tpl["codecs"]):
+        assert got["part_number"] == want["part_number"], "codec part_number drifted"
         for field in _CODEC_LEAVES:
-            assert got[field] == want[field], f"codec {field} drifted with skeleton"
-    print("PASS: Nord H-1 schematic leaves regenerate identically with skeleton")
+            assert got[field] == want[field], f"codec {field} drifted"
+
+    # DOUBLE-CHECK the role->identity->address pairing is hardware-correct.
+    by_role = {}
+    for c in regenerated["codecs"]:
+        role = c["role"]
+        text = role.get("value") or role.get("candidate_value") or ""
+        key = "DAC" if "DAC" in text else ("ADC" if "ADC" in text else "?")
+        by_role[key] = c
+    dac, adc = by_role["DAC"], by_role["ADC"]
+    assert dac["part_number"]["value"] == "pcm1681", "DAC slot must attest pcm1681"
+    assert dac["i2c_address"]["value"] == "0x4c", "DAC/pcm1681 address must be 0x4c"
+    assert dac["part_number"]["ncc_state"] == "ATTESTED"
+    assert dac["i2c_address"]["ncc_state"] == "ATTESTED"
+    assert adc["part_number"]["value"] == "adau1979", "ADC slot must attest adau1979"
+    assert adc["i2c_address"]["value"] == "0x31", "ADC/adau1979 address must be 0x31"
+    assert adc["part_number"]["ncc_state"] == "ATTESTED"
+    assert adc["i2c_address"]["ncc_state"] == "ATTESTED"
+    # Null codec leaves stay un-curated on both codecs.
+    for c in regenerated["codecs"]:
+        assert c["i2c_bus_label"]["value"] is None
+        assert c["reset_gpios"]["value"] is None
+    print("PASS: Nord H-1 regenerates 5 filled leaves ATTESTED, pairing hardware-correct")
 
 
 # ── 3. HANDOFF: a human fills one entry → ATTESTED + disclosure ──────────────
@@ -330,7 +418,7 @@ def test_filled_entry_goes_attested_and_emits_disclosure() -> None:
     assert isinstance(result, GeneratedArtifact)
     text = result.bytes_.decode("utf-8")
     expected_line = (
-        f"\t.addr = 0x31,  /* schematic-attested (sheet {_SHEET})"
+        f"\t.addr = 0x31,  /* schematic-attested ({_SHEET})"
         f"{_PINNED_SUFFIX} */"
     )
     assert expected_line in text, (
@@ -411,14 +499,14 @@ def test_is_placeholder_entry_discriminator() -> None:
 # ── standalone runner ────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    test_skeleton_is_well_formed_placeholder_set()
+    test_nord_overrides_is_partially_curated_set()
     test_skeleton_loads_cleanly_via_convention_loader()
     test_placeholder_entries_do_not_promote_to_attested()
     test_placeholder_never_raises_on_null_identity_codecs()
-    test_nord_codec_stub_byte_identical_with_skeleton()
-    test_nord_template_regenerates_identically_with_skeleton()
+    test_nord_codec_stub_emits_schematic_provenance_when_filled()
+    test_nord_template_regenerates_filled_leaves_attested()
     test_filled_entry_goes_attested_and_emits_disclosure()
     test_filled_and_unfilled_coexist()
     test_null_value_with_attestation_still_raises()
     test_is_placeholder_entry_discriminator()
-    print("\nAll step-5 skeleton tests passed.")
+    print("\nAll step-5 / Part-2 fill tests passed.")

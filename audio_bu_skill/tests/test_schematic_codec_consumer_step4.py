@@ -7,7 +7,7 @@ the CONSUMER: ``generate_codec_stub`` reads the schematic leaves
 template and, when a leaf is ATTESTED, emits its value WITH the pinned
 disclosure comment::
 
-    schematic-attested (sheet <X>), NOT IPCAT-cross-verified
+    schematic-attested (<X>), NOT IPCAT-cross-verified
 
 where ``<X>`` is the leaf's ``attestation.evidence`` (now reachable in the raw
 dict).
@@ -157,13 +157,13 @@ def _emit_text(facts: TrustedFacts, template: dict | None) -> str:
 
 def test_attested_i2c_address_emits_value_with_pinned_comment() -> None:
     """An ATTESTED ``i2c_address`` override flows through to the emitted stub as
-    the schematic value + the pinned ``schematic-attested (sheet <X>) ...``
+    the schematic value + the pinned ``schematic-attested (<X>) ...``
     comment, with <X> sourced from ``attestation.evidence``."""
     template = _projected_raw_template(_codec_override("adau1979", "i2c_address", "0x31"))
     text = _emit_text(_rehydrate_wp2_fixture(), template)
 
     expected_line = (
-        f"\t.addr = 0x31,  /* schematic-attested (sheet {_SHEET})"
+        f"\t.addr = 0x31,  /* schematic-attested ({_SHEET})"
         f"{_PINNED_SUFFIX} */"
     )
     assert expected_line in text, (
@@ -188,11 +188,11 @@ def test_attested_bus_and_reset_emit_disclosure_comments() -> None:
     text = _emit_text(_rehydrate_wp2_fixture(), template)
 
     assert (
-        f"/* control bus: &i2c18  schematic-attested (sheet {_SHEET})"
+        f"/* control bus: &i2c18  schematic-attested ({_SHEET})"
         f"{_PINNED_SUFFIX} */" in text
     ), f"i2c_bus_label disclosure missing:\n{text}"
     assert (
-        f"/* reset-gpios: gpio77  schematic-attested (sheet {_SHEET})"
+        f"/* reset-gpios: gpio77  schematic-attested ({_SHEET})"
         f"{_PINNED_SUFFIX} */" in text
     ), f"reset_gpios disclosure missing:\n{text}"
     print("PASS: ATTESTED bus + reset emit pinned disclosure comments")
@@ -256,14 +256,18 @@ def test_not_attested_template_is_byte_identical_to_no_template() -> None:
 
 
 def test_nord_byte_identity_with_real_committed_template() -> None:
-    """NON-NEGOTIABLE: feed the REAL committed Nord template (0f81452 fixture)
-    to the consumer alongside the real Nord WP2 facts -> byte-identical to the
-    frozen ``nord_codec_stub_expected.c``.
+    """NON-NEGOTIABLE: feed the REAL committed Nord template to the consumer
+    alongside the real Nord WP2 facts -> byte-identical to the frozen
+    ``nord_codec_stub_attested_expected.c``.
 
-    Nord ships no curated file -> both codecs identity-null + every leaf
-    NOT_ATTESTED -> ``_codec_template_leaf`` returns None for every lookup ->
-    fallbacks fire -> zero drift. Proven against the committed fixture, not
-    asserted by fiat.
+    WP-CODEC-IDENTITY-ATTEST Part 2 filled five schematic leaves into Nord's
+    curated_overrides.json, so the committed template now carries ATTESTED
+    i2c_address values (0x31 for adau1979, 0x4c for pcm1681). The consumer
+    therefore emits each ``.addr`` line WITH the pinned
+    ``schematic-attested (<X>), NOT IPCAT-cross-verified`` provenance
+    comment. The numeric addresses are unchanged from the plain path (the
+    ``_NORD_CODECS`` fallback already carried them) — the delta is disclosure
+    ONLY. Proven against the attested fixture, not asserted by fiat.
     """
     facts = _rehydrate_wp2_fixture()
     nord_template = json.loads(_NORD_TEMPLATE.read_text(encoding="utf-8"))
@@ -277,15 +281,15 @@ def test_nord_byte_identity_with_real_committed_template() -> None:
         f"{[r.subject for r in result.contributes_rows]!r}"
     )
 
-    expected_path = _FIXTURES / "nord_codec_stub_expected.c"
+    expected_path = _FIXTURES / "nord_codec_stub_attested_expected.c"
     assert expected_path.is_file(), f"missing fixture: {expected_path!r}"
     expected_bytes = expected_path.read_bytes()
     assert result.bytes_ == expected_bytes, (
-        f"Nord codec_stub drifted with the real committed template.\n"
+        f"Nord codec_stub drifted with the real committed (filled) template.\n"
         f"actual (first 400): {result.bytes_[:400]!r}\n"
         f"expected (first 400): {expected_bytes[:400]!r}"
     )
-    print("PASS: Nord + real committed template == frozen fixture (byte-identical)")
+    print("PASS: Nord + real committed filled template == attested fixture (byte-identical)")
 
 
 def test_nord_byte_identity_no_template_backward_compat() -> None:

@@ -180,16 +180,34 @@ def test_nord_template_byte_identical_to_committed_fixture():
     """Regenerate the real Nord template through the exact harness path and prove
     it is BYTE-identical to the committed audio_hardware_template.json.
 
-    Step 5 (WP_SCHEMATIC_ATTESTED_DESIGN §6) ships a SCHEMA-ONLY skeleton at
-    ``targets/nord-iq10/curated_overrides.json``: the six schematic leaves,
-    value=null, no authority / no attestation. Every entry is a PLACEHOLDER, so
-    the validate+apply path skips them as "not yet curated" -> every schematic
-    leaf stays attestation=None -> the persisted key is omitted everywhere ->
-    zero drift. This test now feeds that real skeleton through the projector and
-    STILL proves byte-identity — the stronger guarantee that shipping the
-    skeleton is a no-op on the emitted template.
+    WP-CODEC-IDENTITY-ATTEST Part 2 (FILL) transcribed five human-reviewed
+    schematic leaves into ``targets/nord-iq10/curated_overrides.json`` — so the
+    file is now PARTIALLY CURATED, not the all-placeholder step-5 skeleton:
+
+      * FILLED (5, value + authority{KB_RULE,schematic} + citing attestation):
+        board_metadata.mclk, codecs.role:DAC.part_number,
+        codecs.role:ADC.part_number, codecs.pcm1681.i2c_address,
+        codecs.adau1979.i2c_address.
+      * PLACEHOLDER (6, value=null, no authority/attestation): the two
+        i2c_bus_label leaves, the two reset_gpios leaves, scmi_index,
+        global_md_oe — each skipped as "not yet curated".
+
+    The invariant under test is unchanged in spirit but stronger in content:
+    the committed on-disk template was regenerated from this SAME curated file,
+    so re-projecting it must reproduce it byte-for-byte. The filled leaves must
+    land ATTESTED and the placeholders must stay omitted — any drift in EITHER
+    direction (a filled leaf silently dropping, or a placeholder leaking a
+    value) breaks byte-identity and fails here.
     """
     from orchestrator.hw_template.projector import _is_placeholder_entry
+
+    _FILLED = {
+        "board_metadata.mclk",
+        "codecs.role:DAC.part_number",
+        "codecs.role:ADC.part_number",
+        "codecs.pcm1681.i2c_address",
+        "codecs.adau1979.i2c_address",
+    }
 
     analysis = json.loads((_NORD_DIR / "qgenie_analysis.json").read_text("utf-8"))
     gc = {
@@ -207,12 +225,22 @@ def test_nord_template_byte_identical_to_committed_fixture():
         },
     }
     curated = load_curated_overrides(_NORD_DIR / "curated_overrides.json", required=False)
-    # Nord ships the step-5 skeleton: a non-empty dict of PLACEHOLDERS ONLY.
-    # Byte-identity holds precisely because every entry is skipped as un-curated.
-    assert isinstance(curated, dict) and curated, "Nord must ship the step-5 skeleton"
-    assert all(_is_placeholder_entry(e) for e in curated.values()), (
-        "every skeleton entry must be a placeholder for byte-identity to hold"
-    )
+    # Nord now ships a PARTIALLY-CURATED set: exactly the five FILLED leaves
+    # carry a value (and are NOT placeholders); everything else is a placeholder
+    # skipped as un-curated. Byte-identity holds because the committed template
+    # was regenerated from this same file.
+    assert isinstance(curated, dict) and curated, "Nord must ship the curated set"
+    for path in _FILLED:
+        assert path in curated, f"expected filled leaf {path!r} missing"
+        assert not _is_placeholder_entry(curated[path]), (
+            f"{path!r} must be a filled (non-placeholder) entry"
+        )
+    for path, entry in curated.items():
+        if path in _FILLED:
+            continue
+        assert _is_placeholder_entry(entry), (
+            f"{path!r} must remain a placeholder (only the 5 reviewed leaves are filled)"
+        )
 
     result = project(
         gc, target_name="nord-iq10", run_id="h1-validation-nord-iq10",

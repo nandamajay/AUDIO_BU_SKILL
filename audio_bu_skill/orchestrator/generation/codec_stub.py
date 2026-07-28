@@ -203,7 +203,7 @@ _FIXME_SIGNALS: tuple[tuple[str, str], ...] = (
 #: The sheet reference is sourced from the leaf's ``attestation.evidence``
 #: (persisted by §6 step 3b). Wording is contractual — the step-4 tests pin it.
 _SCHEMATIC_ATTEST_COMMENT: str = (
-    "schematic-attested (sheet {sheet}), NOT IPCAT-cross-verified"
+    "schematic-attested ({sheet}), NOT IPCAT-cross-verified"
 )
 
 
@@ -320,7 +320,7 @@ def generate_codec_stub(
         ATTESTED §6 step 4). When a curated schematic override ATTESTED a
         per-codec board signal (``i2c_bus_label`` / ``i2c_address`` /
         ``reset_gpios``), that value is emitted here WITH the pinned disclosure
-        comment ``schematic-attested (sheet <X>), NOT IPCAT-cross-verified``
+        comment ``schematic-attested (<X>), NOT IPCAT-cross-verified``
         (``<X>`` sourced from the leaf's ``attestation.evidence``). NOT_ATTESTED
         leaves (and un-curated targets like Nord) fall through to the hardcoded
         fallback unchanged. Read as a RAW DICT only — the firewall forbids
