@@ -877,14 +877,78 @@ def _enforce_fixture_discipline(
 
 # ── Curated overrides (G-3A.15) ──────────────────────────────────────────
 
-# Legal template paths that curated overrides may target.
+# Legal FLAT (2-part) ``group.field`` template paths a curated override may
+# target. The three schematic board leaves (WP_SCHEMATIC_ATTESTED_DESIGN.md
+# §3.2) join the original G-3A.15 trio here — all NOT_ATTESTED slots the
+# projector cannot fill from any automated authority.
 _CURATED_LEGAL_PATHS: frozenset[str] = frozenset({
     "board_metadata.soc",
     "board_metadata.board_variant",
     "board_metadata.pinctrl_state",
+    "board_metadata.mclk",
+    "board_metadata.global_md_oe",
+    "board_metadata.scmi_index",
+})
+
+# Per-codec schematic leaf fields, addressed IDENTITY-KEYED as
+# ``codecs.<key>.<field>`` (e.g. ``codecs.adau1979.i2c_address``), NOT
+# positionally (``codecs[0]``). ``<key>`` is the codec's part_number identity,
+# resolved to the matching entry at apply time (§3.4 ruling: identity-keyed is
+# stable across reordering and mirrors the ``T2.codec.<key>`` row convention).
+_CODEC_SCHEMATIC_FIELDS: frozenset[str] = frozenset({
+    "i2c_bus_label",
+    "i2c_address",
+    "reset_gpios",
+})
+
+# Curated-override origins the validator accepts. Both are human-sourced,
+# gap-fill-only, disclosure-only. ``schematic`` marks a value transcribed off a
+# named schematic sheet (the sheet ref rides in ``attestation.evidence``). It is
+# an ORIGIN string ONLY — never a new authority-strength enum value; strength
+# stays the closed ``AUTHORITY_STRENGTHS`` set (WP_SCHEMATIC_ATTESTED_DESIGN.md
+# §3.1 confirmations).
+_CURATED_LEGAL_ORIGINS: frozenset[str] = frozenset({
+    "reviewer_curated",
+    "schematic",
 })
 
 from orchestrator.reasoning.crossverify_model import AUTHORITY_STRENGTHS  # noqa: E402
+
+
+def _curated_path_kind(path: str) -> str | None:
+    """Classify a curated-override path against the two allowlists.
+
+    Returns ``"board"`` for a legal flat ``board_metadata.<field>`` path,
+    ``"codec"`` for a legal identity-keyed ``codecs.<key>.<field>`` schematic
+    path, or ``None`` when the path is on neither allowlist. Key EXISTENCE is
+    deliberately NOT checked here — the validator has no template to resolve
+    against; an unknown codec key is caught loudly at apply time.
+    """
+    parts = path.split(".")
+    if len(parts) == 2 and path in _CURATED_LEGAL_PATHS:
+        return "board"
+    if (
+        len(parts) == 3
+        and parts[0] == "codecs"
+        and parts[1]  # non-empty identity key
+        and parts[2] in _CODEC_SCHEMATIC_FIELDS
+    ):
+        return "codec"
+    return None
+
+
+def _codec_identity(entry: dict[str, Any]) -> str | None:
+    """The identity key of a codec template entry: its part_number value.
+
+    Prefers the attested ``value``; falls back to ``candidate_value`` (the raw
+    candidate part number, e.g. ``adau1979``). Mirrors the ``T2.codec.<key>``
+    row-key convention so a curated ``codecs.<key>.…`` path resolves to the same
+    codec the projector keyed on.
+    """
+    pn = entry.get("part_number")
+    if not isinstance(pn, FactRecord):
+        return None
+    return pn.value if pn.value is not None else pn.candidate_value
 
 
 def _validate_curated_overrides(
@@ -896,10 +960,12 @@ def _validate_curated_overrides(
             f"curated_overrides must be a dict, got {type(overrides).__name__}"
         )
     for path, entry in overrides.items():
-        if path not in _CURATED_LEGAL_PATHS:
+        if _curated_path_kind(path) is None:
             raise ValueError(
                 f"curated_overrides: illegal template path {path!r}; "
-                f"legal paths are: {sorted(_CURATED_LEGAL_PATHS)}"
+                f"legal flat paths are {sorted(_CURATED_LEGAL_PATHS)}, or "
+                f"identity-keyed codecs.<key>.<field> where <field> in "
+                f"{sorted(_CODEC_SCHEMATIC_FIELDS)}"
             )
         if not isinstance(entry, dict):
             raise ValueError(
@@ -922,10 +988,10 @@ def _validate_curated_overrides(
                 f"curated_overrides[{path!r}]: illegal authority.strength "
                 f"{strength!r}; expected one of {sorted(AUTHORITY_STRENGTHS)}"
             )
-        if authority.get("origin") != "reviewer_curated":
+        if authority.get("origin") not in _CURATED_LEGAL_ORIGINS:
             raise ValueError(
-                f"curated_overrides[{path!r}]: authority.origin must be "
-                f"'reviewer_curated', got {authority.get('origin')!r}"
+                f"curated_overrides[{path!r}]: authority.origin must be one of "
+                f"{sorted(_CURATED_LEGAL_ORIGINS)}, got {authority.get('origin')!r}"
             )
         attestation = entry.get("attestation")
         if not isinstance(attestation, dict):
@@ -957,19 +1023,32 @@ def _apply_curated_overrides(
 ) -> None:
     """Apply validated curated overrides to NOT_ATTESTED template facts (gap-fill).
 
-    Only replaces a FactRecord if its current ncc_state is NOT_ATTESTED.
-    ATTESTED facts (from automation) are NOT overridden — Slice 3 handles
-    agreement/contradiction logic.
+    Two path kinds are honoured (see :func:`_curated_path_kind`):
+
+      * flat ``board_metadata.<field>`` → the board_metadata group;
+      * identity-keyed ``codecs.<key>.<field>`` → the codec entry whose
+        part_number identity equals ``<key>`` (§3.4 ruling). An unknown ``<key>``
+        raises loudly — a curated override that names a codec the target does
+        not have is an authoring error, never a silent no-op.
+
+    Gap-fill discipline (unchanged): a FactRecord is replaced ONLY when its
+    current ncc_state is NOT_ATTESTED **and** it is not candidate_derived.
+    ATTESTED facts (from automation) are never overwritten; a candidate_derived
+    leaf is never promoted to attested (the model.py:138 firewall would reject
+    the construction anyway — this guard refuses it earlier and explicitly).
     """
     for path, entry in overrides.items():
+        kind = _curated_path_kind(path)
         parts = path.split(".")
-        if len(parts) != 2:
-            continue
-        group_name, field_name = parts
 
-        if group_name == "board_metadata":
+        if kind == "board":
             group = template.board_metadata
+            field_name = parts[1]
+        elif kind == "codec":
+            codec_key, field_name = parts[1], parts[2]
+            group = _resolve_codec_entry(template, codec_key)
         else:
+            # Validation already rejected illegal paths; defensive skip.
             continue
 
         existing = group.get(field_name)
@@ -977,8 +1056,14 @@ def _apply_curated_overrides(
             continue
         if existing.ncc_state != "NOT_ATTESTED":
             continue
+        if existing.candidate_derived:
+            # Never promote a candidate-derived value to attested. The
+            # allowlisted schematic leaves are all candidate_derived=False, so
+            # this never fires for them; it hard-stops any future path that
+            # points at a candidate slot (e.g. codec part_number).
+            continue
 
-        curated_fact = FactRecord(
+        group[field_name] = FactRecord(
             value=entry["value"],
             authority=dict(entry["authority"]),
             citations=list(entry.get("citations") or []),
@@ -989,7 +1074,24 @@ def _apply_curated_overrides(
             reviewer_required=False,
             ncc_state="ATTESTED",
         )
-        group[field_name] = curated_fact
+
+
+def _resolve_codec_entry(
+    template: AudioHardwareTemplate, codec_key: str
+) -> dict[str, Any]:
+    """Return the codec template entry whose identity equals ``codec_key``.
+
+    Raises ``ValueError`` (loud) when no codec matches — a curated override
+    naming an absent codec is an authoring error, per the step-2 contract.
+    """
+    for entry in template.codecs:
+        if _codec_identity(entry) == codec_key:
+            return entry
+    known = [_codec_identity(e) for e in template.codecs]
+    raise ValueError(
+        f"curated_overrides: codec identity {codec_key!r} not found in "
+        f"template; known codec identities are {known!r}"
+    )
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
