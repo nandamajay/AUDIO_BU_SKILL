@@ -210,7 +210,7 @@ def _run_generation(
             elif artifact_class == "dt_scaffolding":
                 result = func(facts, template=template)  # type: ignore[call-arg]
             elif artifact_class == "codec_stub":
-                result = func(facts, source=codec_probe)  # type: ignore[call-arg]
+                result = func(facts, source=codec_probe, template=template)  # type: ignore[call-arg]
             else:
                 result = func(facts)  # type: ignore[call-arg]
         except Exception as exc:  # noqa: BLE001 — failure isolation per §WP10(h)

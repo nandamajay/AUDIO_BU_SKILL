@@ -175,6 +175,100 @@ _FIXME_SIGNALS: tuple[tuple[str, str], ...] = (
 )
 
 
+# ── Schematic-attested template consumption (WP_SCHEMATIC_ATTESTED §6 step 4) ──
+#
+# The codec stub is a CONSUMER of the H-1 AudioHardwareTemplate. When a curated
+# schematic override attested one of the per-codec board signals
+# (``i2c_bus_label`` / ``i2c_address`` / ``reset_gpios``), that value is surfaced
+# here WITH a pinned disclosure comment naming the schematic sheet. The template
+# is READ as the RAW DICT (``AudioHardwareTemplate.to_dict()``) only — this
+# module MUST NOT import ``orchestrator.hw_template.model`` (WP-64 firewall,
+# enforced by the AST guard in ``tests/test_generator_import_guards.py``). The
+# helpers below re-implement the ``_template_value`` navigation LOCALLY rather
+# than importing the peer machine_driver generator (no generator↔generator
+# coupling either).
+#
+# Disclosure-only: the schematic value and its attestation never reach
+# ``cross_verification`` / ``TrustedFacts`` / any gate; ``is_open`` does not
+# consult the template. It surfaces a reviewer disclosure in the emitted bytes,
+# nothing more.
+#
+# Byte-identity for un-curated targets (Nord): Nord ships no curated file, so
+# every schematic leaf is NOT_ATTESTED — and its codec identities are null, so
+# no codec entry even matches — meaning ``_attested_schematic_value`` returns
+# ``None`` for every lookup, every hardcoded fallback fires, and the emitted
+# bytes are byte-identical to the pre-step-4 fixture.
+
+#: Pinned disclosure comment fragment appended to every schematic-attested emit.
+#: The sheet reference is sourced from the leaf's ``attestation.evidence``
+#: (persisted by §6 step 3b). Wording is contractual — the step-4 tests pin it.
+_SCHEMATIC_ATTEST_COMMENT: str = (
+    "schematic-attested (sheet {sheet}), NOT IPCAT-cross-verified"
+)
+
+
+def _codec_template_leaf(
+    template: dict | None, codec_key: str, field: str
+) -> dict | None:
+    """Return the raw FactRecord dict for ``codecs[<codec_key>].<field>``.
+
+    ``template`` is the raw ``AudioHardwareTemplate.to_dict()`` payload (a plain
+    dict), NOT the model class — the firewall forbids importing the model here.
+    The ``codecs`` entry is matched by IDENTITY: a codec entry's ``part_number``
+    leaf ``value`` (or its ``candidate_value`` fallback) must equal ``codec_key``.
+    Returns ``None`` when there is no template, no ``codecs`` list, no matching
+    codec entry, or no such field leaf on the matched entry.
+    """
+    if not isinstance(template, dict):
+        return None
+    codecs = template.get("codecs")
+    if not isinstance(codecs, list):
+        return None
+    for entry in codecs:
+        if not isinstance(entry, dict):
+            continue
+        part_number = entry.get("part_number")
+        if not isinstance(part_number, dict):
+            continue
+        identity = part_number.get("value") or part_number.get("candidate_value")
+        if identity == codec_key:
+            leaf = entry.get(field)
+            return leaf if isinstance(leaf, dict) else None
+    return None
+
+
+def _attested_schematic_value(
+    leaf: dict | None, *, codec_key: str, field: str
+) -> tuple[object, str] | None:
+    """Return ``(value, sheet)`` iff ``leaf`` is an ATTESTED schematic leaf.
+
+    Returns ``None`` — deferring to the hardcoded fallback — for every non-
+    ATTESTED case: a missing leaf, ``NOT_ATTESTED`` / ``NOT_CROSS_CHECKABLE``,
+    or an ATTESTED leaf whose ``value`` is ``None``.
+
+    Raises a loud ``ValueError`` when the leaf IS ATTESTED with a real value but
+    carries no ``attestation.evidence`` sheet reference. The step-3b validator
+    already blocks an empty-evidence override upstream; the consumer refuses
+    defensively too — it must NEVER emit an uncited schematic value.
+    """
+    if not isinstance(leaf, dict):
+        return None
+    if leaf.get("ncc_state") != "ATTESTED":
+        return None
+    value = leaf.get("value")
+    if value is None:
+        return None
+    attestation = leaf.get("attestation")
+    sheet = attestation.get("evidence") if isinstance(attestation, dict) else None
+    if not sheet:
+        raise ValueError(
+            f"codec_stub: ATTESTED schematic leaf codecs[{codec_key!r}].{field} "
+            "carries no attestation.evidence sheet reference — refusing to emit "
+            "an uncited schematic value (WP_SCHEMATIC_ATTESTED §3.1)."
+        )
+    return value, sheet
+
+
 @register_generator(
     "codec_stub",
     order=1,
@@ -188,6 +282,7 @@ def generate_codec_stub(
     kb: object | None = None,
     *,
     source: CodecDriverProbe | None = None,
+    template: dict | None = None,
 ) -> GenerationResult:
     """Emit a codec stub artifact or a skipped verdict for one target.
 
@@ -220,6 +315,18 @@ def generate_codec_stub(
         cannot promote a candidate or open a closed gate. A missing / absent
         driver degrades honestly to the hardcoded value marked NOT
         kernel-attested — it never fabricates a FOUND.
+    template:
+        Optional raw ``AudioHardwareTemplate.to_dict()`` dict (WP_SCHEMATIC_
+        ATTESTED §6 step 4). When a curated schematic override ATTESTED a
+        per-codec board signal (``i2c_bus_label`` / ``i2c_address`` /
+        ``reset_gpios``), that value is emitted here WITH the pinned disclosure
+        comment ``schematic-attested (sheet <X>), NOT IPCAT-cross-verified``
+        (``<X>`` sourced from the leaf's ``attestation.evidence``). NOT_ATTESTED
+        leaves (and un-curated targets like Nord) fall through to the hardcoded
+        fallback unchanged. Read as a RAW DICT only — the firewall forbids
+        importing ``orchestrator.hw_template.model`` here. Disclosure-only: the
+        schematic value / attestation never reach ``cross_verification`` /
+        ``TrustedFacts`` / any gate.
 
     Returns
     -------
@@ -376,8 +483,43 @@ def generate_codec_stub(
             lines.append(f"/* {description} */")
             lines.append(f"static struct i2c_board_info nord_{codec_key}_info = {{")
             lines.append(f"\t.type = \"{codec_key}\",")
-            lines.append(f"\t.addr = 0x{i2c_addr:02x},")
+
+            # Schematic-attested template consumption (§6 step 4). Each lookup
+            # returns ``(value, sheet)`` ONLY when the leaf is ATTESTED with a
+            # non-None value + a real attestation.evidence sheet; otherwise
+            # ``None`` → the hardcoded fallback fires. On Nord (no curated file,
+            # null codec identities) every lookup is None → byte-identity holds.
+            addr_attested = _attested_schematic_value(
+                _codec_template_leaf(template, codec_key, "i2c_address"),
+                codec_key=codec_key,
+                field="i2c_address",
+            )
+            bus_attested = _attested_schematic_value(
+                _codec_template_leaf(template, codec_key, "i2c_bus_label"),
+                codec_key=codec_key,
+                field="i2c_bus_label",
+            )
+            reset_attested = _attested_schematic_value(
+                _codec_template_leaf(template, codec_key, "reset_gpios"),
+                codec_key=codec_key,
+                field="reset_gpios",
+            )
+
+            if addr_attested is not None:
+                addr_value, addr_sheet = addr_attested
+                addr_comment = _SCHEMATIC_ATTEST_COMMENT.format(sheet=addr_sheet)
+                lines.append(f"\t.addr = {addr_value},  /* {addr_comment} */")
+            else:
+                lines.append(f"\t.addr = 0x{i2c_addr:02x},")
             lines.append(f"\t/* compatible = \"{eff_compatible}\" */")
+            if bus_attested is not None:
+                bus_value, bus_sheet = bus_attested
+                bus_comment = _SCHEMATIC_ATTEST_COMMENT.format(sheet=bus_sheet)
+                lines.append(f"\t/* control bus: {bus_value}  {bus_comment} */")
+            if reset_attested is not None:
+                reset_value, reset_sheet = reset_attested
+                reset_comment = _SCHEMATIC_ATTEST_COMMENT.format(sheet=reset_sheet)
+                lines.append(f"\t/* reset-gpios: {reset_value}  {reset_comment} */")
             lines.append("};")
         else:
             # Unrecognised codec on the bus (row is advisory-open but the
