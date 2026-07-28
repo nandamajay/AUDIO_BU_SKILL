@@ -74,6 +74,7 @@ from orchestrator.generation.registry import (
     generator_order,
 )
 from orchestrator.generation.source_probe import SourceProbe
+from orchestrator.generation.codec_driver_probe import CodecDriverProbe
 from orchestrator.generation.soc_descriptor import resolve_driver_source
 
 
@@ -190,6 +191,16 @@ def _run_generation(
     # reaches facts, a gate, or the emitted bytes (§Move-2 Slice A).
     probe = SourceProbe.from_tree(kernel_source, descriptor=descriptor)
 
+    # Slice 1: build the read-only codec-driver probe ONCE, keyed by the codec
+    # identities Phase-2A already projected (T4b.codec.<key> subjects). We
+    # REUSE the onboarding identity here — the probe does not recollect it.
+    # Missing tree → all-FILE_NOT_FOUND, no raise. Disclosure-only: handed to
+    # the codec_stub lane by keyword; no other lane receives it, and it never
+    # reaches facts, a gate, or the emitted bytes (the attested value is
+    # byte-identical to the hardcoded one on Nord — only provenance shifts).
+    codec_keys = _codec_keys_from_facts(facts)
+    codec_probe = CodecDriverProbe.from_tree(kernel_source, codec_keys)
+
     results: list[GenerationResult] = []
     for artifact_class in order:
         func = generator_func(artifact_class)
@@ -198,6 +209,8 @@ def _run_generation(
                 result: GenerationResult = func(facts, source=probe, template=template)  # type: ignore[call-arg]
             elif artifact_class == "dt_scaffolding":
                 result = func(facts, template=template)  # type: ignore[call-arg]
+            elif artifact_class == "codec_stub":
+                result = func(facts, source=codec_probe)  # type: ignore[call-arg]
             else:
                 result = func(facts)  # type: ignore[call-arg]
         except Exception as exc:  # noqa: BLE001 — failure isolation per §WP10(h)
@@ -229,3 +242,20 @@ def _run_generation(
         "source_resolution": descriptor.to_dict(),
         "template_used": template is not None,
     }
+
+
+def _codec_keys_from_facts(facts: TrustedFacts) -> tuple[str, ...]:
+    """Codec identities (join keys) projected by Phase-2A, in sorted order.
+
+    Enumerates every ``T4b.codec.<key>`` row and strips the ``codec.`` prefix
+    from the subject, yielding e.g. ``("adau1979", "pcm1681")``. This REUSES the
+    onboarding-derived identity — the codec probe does not recollect it. The
+    subject-suffix derivation mirrors ``codec_stub``'s own ``codec_key`` logic
+    exactly so the probe is keyed by the same strings the emit loop queries.
+    Empty when no codec rows were projected.
+    """
+    keys: set[str] = set()
+    for key in facts.rows_by_track_subject:
+        if key.startswith("T4b.codec."):
+            keys.add(key[len("T4b.codec.") :])
+    return tuple(sorted(keys))

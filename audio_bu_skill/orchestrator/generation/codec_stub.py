@@ -105,6 +105,7 @@ Run: ``PYTHONPATH=audio_bu_skill python3 -m tests.test_generation_codec``
 
 from __future__ import annotations
 
+from orchestrator.generation.codec_driver_probe import CodecDriverProbe, ClaimStatus
 from orchestrator.generation.config import (
     KNOWN_BAD_PARTIAL_MATCH_RULES,
     PATH_GUARD_ROOT,
@@ -182,7 +183,12 @@ _FIXME_SIGNALS: tuple[tuple[str, str], ...] = (
         ("T4b", "*"),
     ),
 )
-def generate_codec_stub(facts: TrustedFacts, kb: object | None = None) -> GenerationResult:
+def generate_codec_stub(
+    facts: TrustedFacts,
+    kb: object | None = None,
+    *,
+    source: CodecDriverProbe | None = None,
+) -> GenerationResult:
     """Emit a codec stub artifact or a skipped verdict for one target.
 
     Pure, deterministic, zero I/O. Byte-identical ``facts.to_dict()`` produces
@@ -197,6 +203,23 @@ def generate_codec_stub(facts: TrustedFacts, kb: object | None = None) -> Genera
         generators). WP4 does not consult a KB — the ``rule_id`` field on
         gating rows is the entire policy signal, and codec bindings are
         authority-less by design.
+    source:
+        Optional read-only :class:`CodecDriverProbe` (Slice 1). When supplied,
+        each codec's ``compatible`` is grounded on the KERNEL CODEC DRIVER's
+        ``of_match_table`` (an INDEPENDENT, kernel-source authority that does
+        NOT reference the candidate DTS ``5267b2e1``) instead of the hardcoded
+        ``_NORD_CODECS`` value, and a join-key-caveat disclosure row is
+        appended to ``contributes_rows``. When ``None`` (the default, and the
+        path exercised by the no-source Nord fixture test), the generator
+        degrades silently to the hardcoded value with NO disclosure row — the
+        emitted bytes are byte-identical either way, because the observed
+        of_match_table literals equal ``_NORD_CODECS`` on Nord.
+
+        Disclosure-only: the probe never reaches ``cross_verification``,
+        ``TrustedFacts``, or any gate; ``is_open`` does not consult it. It
+        cannot promote a candidate or open a closed gate. A missing / absent
+        driver degrades honestly to the hardcoded value marked NOT
+        kernel-attested — it never fabricates a FOUND.
 
     Returns
     -------
@@ -327,11 +350,34 @@ def generate_codec_stub(facts: TrustedFacts, kb: object | None = None) -> Genera
             lines.append("")
         if codec_key in _NORD_CODECS:
             compatible, i2c_addr, description = _NORD_CODECS[codec_key]
+            # Slice 1: ground the compatible on the kernel codec driver's
+            # of_match_table when a probe was supplied. FOUND → use the
+            # kernel-attested literal (byte-identical to the hardcoded value on
+            # Nord); ABSENT / FILE_NOT_FOUND → keep the hardcoded value, marked
+            # NOT kernel-attested. Either way the join key (codec identity) is
+            # candidate-derived, so the disclosure caveats the value's trust.
+            eff_compatible = compatible
+            if source is not None:
+                status, kernel_compatible, driver_file, driver_line = (
+                    source.compatible_for(codec_key)
+                )
+                if status is ClaimStatus.FOUND and kernel_compatible is not None:
+                    eff_compatible = kernel_compatible
+                contributes_rows.append(
+                    _compatible_disclosure_row(
+                        codec_key,
+                        status,
+                        kernel_compatible,
+                        driver_file,
+                        driver_line,
+                        hardcoded=compatible,
+                    )
+                )
             lines.append(f"/* {description} */")
             lines.append(f"static struct i2c_board_info nord_{codec_key}_info = {{")
             lines.append(f"\t.type = \"{codec_key}\",")
             lines.append(f"\t.addr = 0x{i2c_addr:02x},")
-            lines.append(f"\t/* compatible = \"{compatible}\" */")
+            lines.append(f"\t/* compatible = \"{eff_compatible}\" */")
             lines.append("};")
         else:
             # Unrecognised codec on the bus (row is advisory-open but the
@@ -377,6 +423,68 @@ def generate_codec_stub(facts: TrustedFacts, kb: object | None = None) -> Genera
         path_hint=f"{PATH_GUARD_ROOT}{_ARTIFACT_CLASS}/nord_codec.c",
         bytes_=bytes_,
         contributes_rows=contributes_rows,
+    )
+
+
+#: The join-key provenance caveat — attached VERBATIM to every Slice 1
+#: compatible disclosure row. The attested VALUE comes from the kernel driver
+#: of_match_table (kernel_source, independent of the candidate DTS), but the
+#: LOOKUP KEY that selected which driver file to read is candidate-derived, so
+#: the value is only as trustworthy as that codec selection.
+_JOIN_KEY_CAVEAT: str = (
+    "compatible attested from kernel driver of_match_table (kernel_source); "
+    "codec-identity join key is candidate-derived (5267b2e1) — value is only "
+    "as trustworthy as the codec selection."
+)
+
+
+def _compatible_disclosure_row(
+    codec_key: str,
+    status: ClaimStatus,
+    kernel_compatible: str | None,
+    driver_file: str | None,
+    driver_line: int | None,
+    *,
+    hardcoded: str,
+) -> VerificationRow:
+    """Build the Slice 1 compatible-provenance disclosure row for one codec.
+
+    Disclosure-only (never fed back to cross_verification / TrustedFacts).
+    ``verdict=NOT_CROSS_CHECKABLE`` + ``coverage_gap_reason=authority_out_of_scope``
+    mirror the machine_driver ``driver_match`` disclosure. The first note states
+    what was observed (FOUND kernel-attested / ABSENT fallback / FILE_NOT_FOUND
+    fallback); the second note is the mandatory join-key caveat, verbatim.
+    """
+    if status is ClaimStatus.FOUND and kernel_compatible is not None:
+        anchor = (
+            f"{driver_file}:{driver_line}"
+            if driver_file is not None and driver_line is not None
+            else (driver_file or "of_match_table")
+        )
+        head = (
+            f"codec_stub: OBSERVED FOUND — compatible {kernel_compatible!r} for "
+            f"codec {codec_key!r} is attested by the kernel driver of_match_table "
+            f"({anchor}); emitted from kernel_source."
+        )
+    elif status is ClaimStatus.ABSENT:
+        head = (
+            f"codec_stub: OBSERVED ABSENT — no matching .compatible for codec "
+            f"{codec_key!r} in the readable kernel codec driver(s); fell back to "
+            f"hardcoded {hardcoded!r}, NOT kernel-attested. The codec driver must "
+            "be written before this compatible can be kernel-attested."
+        )
+    else:  # FILE_NOT_FOUND
+        head = (
+            f"codec_stub: UNVERIFIED — could not read any kernel codec driver for "
+            f"codec {codec_key!r} (no kernel-source tree supplied or file "
+            f"missing); fell back to hardcoded {hardcoded!r}, NOT kernel-attested."
+        )
+    return VerificationRow(
+        track="T4b",
+        subject=f"codec.{codec_key}.compatible_source",
+        verdict="NOT_CROSS_CHECKABLE",
+        coverage_gap_reason="authority_out_of_scope",
+        notes=[head, _JOIN_KEY_CAVEAT],
     )
 
 
