@@ -890,16 +890,37 @@ _CURATED_LEGAL_PATHS: frozenset[str] = frozenset({
     "board_metadata.scmi_index",
 })
 
-# Per-codec schematic leaf fields, addressed IDENTITY-KEYED as
-# ``codecs.<key>.<field>`` (e.g. ``codecs.adau1979.i2c_address``), NOT
-# positionally (``codecs[0]``). ``<key>`` is the codec's part_number identity,
-# resolved to the matching entry at apply time (§3.4 ruling: identity-keyed is
-# stable across reordering and mirrors the ``T2.codec.<key>`` row convention).
+# The codec identity leaf. It cannot be addressed by identity (that is the very
+# thing it establishes — chicken-and-egg), so it is addressed ROLE-ANCHORED via
+# ``codecs.role:<kw>.part_number`` (WP-CODEC-IDENTITY-ATTEST). Everything else is
+# identity-keyed and resolves only AFTER part_number is attested.
+_CODEC_IDENTITY_FIELD: str = "part_number"
+
+# Per-codec schematic leaf fields. ``part_number`` (the identity leaf) is a legal
+# schematic field but is addressed role-anchored, NOT identity-keyed (see
+# ``_curated_path_kind`` / ``_CODEC_IDENTITY_KEYED_FIELDS``). The remaining fields
+# are addressed IDENTITY-KEYED as ``codecs.<key>.<field>`` (e.g.
+# ``codecs.adau1979.i2c_address``), NOT positionally (``codecs[0]``). ``<key>`` is
+# the codec's part_number identity, resolved to the matching entry at apply time
+# (§3.4 ruling: identity-keyed is stable across reordering and mirrors the
+# ``T2.codec.<key>`` row convention).
 _CODEC_SCHEMATIC_FIELDS: frozenset[str] = frozenset({
+    _CODEC_IDENTITY_FIELD,
     "i2c_bus_label",
     "i2c_address",
     "reset_gpios",
 })
+
+# Fields addressed by the now-attested identity (``codecs.<identity>.<field>``).
+# ``part_number`` is EXCLUDED: it IS the identity, so keying it by itself is
+# circular. It is instead addressed role-anchored — see ``_curated_path_kind``'s
+# ``"codec_identity"`` branch.
+_CODEC_IDENTITY_KEYED_FIELDS: frozenset[str] = (
+    _CODEC_SCHEMATIC_FIELDS - {_CODEC_IDENTITY_FIELD}
+)
+
+# Prefix marking a role-anchored codec key: ``codecs.role:<kw>.part_number``.
+_CODEC_ROLE_ANCHOR_PREFIX: str = "role:"
 
 # Curated-override origins the validator accepts. Both are human-sourced,
 # gap-fill-only, disclosure-only. ``schematic`` marks a value transcribed off a
@@ -916,24 +937,40 @@ from orchestrator.reasoning.crossverify_model import AUTHORITY_STRENGTHS  # noqa
 
 
 def _curated_path_kind(path: str) -> str | None:
-    """Classify a curated-override path against the two allowlists.
+    """Classify a curated-override path against the allowlists.
 
-    Returns ``"board"`` for a legal flat ``board_metadata.<field>`` path,
-    ``"codec"`` for a legal identity-keyed ``codecs.<key>.<field>`` schematic
-    path, or ``None`` when the path is on neither allowlist. Key EXISTENCE is
-    deliberately NOT checked here — the validator has no template to resolve
-    against; an unknown codec key is caught loudly at apply time.
+    Returns:
+      * ``"board"``          — a legal flat ``board_metadata.<field>`` path;
+      * ``"codec_identity"`` — a role-anchored ``codecs.role:<kw>.part_number``
+        path (the identity leaf; keyed by role because part_number cannot key
+        itself — WP-CODEC-IDENTITY-ATTEST);
+      * ``"codec"``          — an identity-keyed ``codecs.<key>.<field>`` path
+        for a NON-identity schematic field (i2c_address / i2c_bus_label /
+        reset_gpios), resolved against the now-attested part_number;
+      * ``None``             — the path is on no allowlist.
+
+    Key EXISTENCE is deliberately NOT checked here — the validator has no
+    template to resolve against; an unknown codec key (or an unmatched /
+    ambiguous role anchor) is caught loudly at apply time.
     """
     parts = path.split(".")
     if len(parts) == 2 and path in _CURATED_LEGAL_PATHS:
         return "board"
-    if (
-        len(parts) == 3
-        and parts[0] == "codecs"
-        and parts[1]  # non-empty identity key
-        and parts[2] in _CODEC_SCHEMATIC_FIELDS
-    ):
-        return "codec"
+    if len(parts) == 3 and parts[0] == "codecs" and parts[1]:
+        key, field_name = parts[1], parts[2]
+        # Role-anchored identity leaf: codecs.role:<kw>.part_number
+        if (
+            key.startswith(_CODEC_ROLE_ANCHOR_PREFIX)
+            and len(key) > len(_CODEC_ROLE_ANCHOR_PREFIX)
+            and field_name == _CODEC_IDENTITY_FIELD
+        ):
+            return "codec_identity"
+        # Identity-keyed non-identity schematic field.
+        if (
+            not key.startswith(_CODEC_ROLE_ANCHOR_PREFIX)
+            and field_name in _CODEC_IDENTITY_KEYED_FIELDS
+        ):
+            return "codec"
     return None
 
 
@@ -994,9 +1031,10 @@ def _validate_curated_overrides(
         if _curated_path_kind(path) is None:
             raise ValueError(
                 f"curated_overrides: illegal template path {path!r}; "
-                f"legal flat paths are {sorted(_CURATED_LEGAL_PATHS)}, or "
-                f"identity-keyed codecs.<key>.<field> where <field> in "
-                f"{sorted(_CODEC_SCHEMATIC_FIELDS)}"
+                f"legal flat paths are {sorted(_CURATED_LEGAL_PATHS)}; "
+                f"the identity leaf is role-anchored codecs.role:<kw>.part_number; "
+                f"other codec fields are identity-keyed codecs.<identity>.<field> "
+                f"where <field> in {sorted(_CODEC_IDENTITY_KEYED_FIELDS)}"
             )
         if not isinstance(entry, dict):
             raise ValueError(
@@ -1058,20 +1096,50 @@ def _apply_curated_overrides(
 ) -> None:
     """Apply validated curated overrides to NOT_ATTESTED template facts (gap-fill).
 
-    Two path kinds are honoured (see :func:`_curated_path_kind`):
+    Three path kinds are honoured (see :func:`_curated_path_kind`):
 
       * flat ``board_metadata.<field>`` → the board_metadata group;
+      * role-anchored ``codecs.role:<kw>.part_number`` → the codec entry whose
+        ``role`` text contains ``<kw>``; this is the IDENTITY leaf, addressed by
+        role because part_number cannot key itself (chicken-and-egg). An unmatched
+        or ambiguous role anchor raises loudly.
       * identity-keyed ``codecs.<key>.<field>`` → the codec entry whose
         part_number identity equals ``<key>`` (§3.4 ruling). An unknown ``<key>``
         raises loudly — a curated override that names a codec the target does
         not have is an authoring error, never a silent no-op.
 
-    Gap-fill discipline (unchanged): a FactRecord is replaced ONLY when its
-    current ncc_state is NOT_ATTESTED **and** it is not candidate_derived.
-    ATTESTED facts (from automation) are never overwritten; a candidate_derived
-    leaf is never promoted to attested (the model.py:138 firewall would reject
-    the construction anyway — this guard refuses it earlier and explicitly).
+    **Two passes** so ordering is deterministic regardless of dict insertion
+    order: identity leaves (``codec_identity``) are applied FIRST, so a
+    subsequent identity-keyed ``codecs.<identity>.<field>`` resolves against the
+    now-attested part_number.
+
+    Gap-fill discipline: a FactRecord is replaced ONLY when its current
+    ncc_state is NOT_ATTESTED. ATTESTED facts (from automation) are never
+    overwritten.
+
+    Candidate-promotion (WP-CODEC-IDENTITY-ATTEST): for a NON-identity field the
+    candidate_derived guard still HARD-STOPS promotion (those leaves are all
+    candidate_derived=False anyway). The identity leaf ``part_number`` is the one
+    guarded exception: a candidate_derived part_number MAY be promoted to
+    ATTESTED, but ONLY via this explicit role-anchored override that carries an
+    ``attestation.evidence`` sheet citation (enforced by the validator). It is
+    NEVER auto-promoted, NEVER set from the candidate value (the attested value
+    is ``entry["value"]``, transcribed from the schematic), and NEVER promoted
+    without evidence. With no override, ``part_number`` stays exactly as the
+    projector emitted it and the model.py:138 self-promotion firewall is intact.
     """
+    # Pass 1: identity leaves first (role-anchored part_number), so pass 2's
+    # identity-keyed lookups resolve against the freshly-attested identity.
+    for path, entry in overrides.items():
+        if _is_placeholder_entry(entry):
+            continue
+        if _curated_path_kind(path) != "codec_identity":
+            continue
+        role_kw = path.split(".")[1][len(_CODEC_ROLE_ANCHOR_PREFIX):]
+        codec_entry = _resolve_codec_by_role(template, role_kw)
+        _apply_identity_leaf(codec_entry, entry)
+
+    # Pass 2: board + identity-keyed codec fields.
     for path, entry in overrides.items():
         if _is_placeholder_entry(entry):
             # Un-curated skeleton slot: no claim to apply. Skipped BEFORE any
@@ -1090,6 +1158,8 @@ def _apply_curated_overrides(
         elif kind == "codec":
             codec_key, field_name = parts[1], parts[2]
             group = _resolve_codec_entry(template, codec_key)
+        elif kind == "codec_identity":
+            continue  # already applied in pass 1
         else:
             # Validation already rejected illegal paths; defensive skip.
             continue
@@ -1100,28 +1170,93 @@ def _apply_curated_overrides(
         if existing.ncc_state != "NOT_ATTESTED":
             continue
         if existing.candidate_derived:
-            # Never promote a candidate-derived value to attested. The
-            # allowlisted schematic leaves are all candidate_derived=False, so
-            # this never fires for them; it hard-stops any future path that
-            # points at a candidate slot (e.g. codec part_number).
+            # Never promote a candidate-derived value to attested for a
+            # NON-identity field. The allowlisted schematic leaves are all
+            # candidate_derived=False, so this never fires for them; it
+            # hard-stops any path that points at a candidate slot. The identity
+            # leaf's guarded exception lives in _apply_identity_leaf (pass 1).
             continue
 
-        group[field_name] = FactRecord(
-            value=entry["value"],
-            authority=dict(entry["authority"]),
-            citations=list(entry.get("citations") or []),
-            row_ref=None,
-            independently_verified=False,
-            candidate_derived=False,
-            candidate_value=None,
-            reviewer_required=False,
-            ncc_state="ATTESTED",
-            # Persist the curated attestation block (validated non-empty above)
-            # so a downstream generation consumer can surface the sheet ref in
-            # its disclosure comment. Disclosure-only: this never reaches
-            # cross_verification / TrustedFacts / any gate.
-            attestation=dict(entry["attestation"]),
-        )
+        group[field_name] = _attested_factrecord(entry)
+
+
+def _attested_factrecord(entry: dict[str, Any]) -> FactRecord:
+    """Build the ATTESTED FactRecord for a validated curated override entry.
+
+    The attestation block is persisted (disclosure-only) so a downstream
+    generation consumer can surface the sheet ref in its disclosure comment. It
+    never reaches cross_verification / TrustedFacts / any gate.
+    """
+    return FactRecord(
+        value=entry["value"],
+        authority=dict(entry["authority"]),
+        citations=list(entry.get("citations") or []),
+        row_ref=None,
+        independently_verified=False,
+        candidate_derived=False,
+        candidate_value=None,
+        reviewer_required=False,
+        ncc_state="ATTESTED",
+        attestation=dict(entry["attestation"]),
+    )
+
+
+def _apply_identity_leaf(
+    codec_entry: dict[str, Any], entry: dict[str, Any]
+) -> None:
+    """Guarded promotion of the ``part_number`` identity leaf (pass 1).
+
+    Replaces a NOT_ATTESTED part_number — candidate_derived OR not — with an
+    ATTESTED record whose value is the transcribed schematic identity
+    (``entry["value"]``, e.g. ``"adau1979"``). This is the ONE place a
+    candidate_derived leaf may be promoted, and only because the validator has
+    already proven this override carries an ``attestation.evidence`` citation.
+    An already-ATTESTED identity is never overwritten.
+    """
+    existing = codec_entry.get(_CODEC_IDENTITY_FIELD)
+    if not isinstance(existing, FactRecord):
+        return
+    if existing.ncc_state != "NOT_ATTESTED":
+        return
+    # NOTE: no candidate_derived hard-stop here — this is the guarded
+    # exception. The promoted record is candidate_derived=False and takes its
+    # value from the cited schematic override, NOT from existing.candidate_value.
+    codec_entry[_CODEC_IDENTITY_FIELD] = _attested_factrecord(entry)
+
+
+def _resolve_codec_by_role(
+    template: AudioHardwareTemplate, role_kw: str
+) -> dict[str, Any]:
+    """Return the single codec entry whose ``role`` text contains ``role_kw``.
+
+    Role text is taken from the record's ``value`` if attested, else its
+    ``candidate_value`` (Nord's roles are candidate-only: "DAC / playback path,
+    I2C-attached" / "ADC / capture path, I2C-attached"). Matching is
+    case-insensitive substring. Raises loudly on ZERO or MULTIPLE matches — a
+    role anchor that is ambiguous or unmatched is an authoring error, never a
+    silent no-op.
+    """
+    needle = role_kw.lower()
+    matches: list[dict[str, Any]] = []
+    for entry in template.codecs:
+        role = entry.get("role")
+        if not isinstance(role, FactRecord):
+            continue
+        role_text = role.value if role.value is not None else role.candidate_value
+        if isinstance(role_text, str) and needle in role_text.lower():
+            matches.append(entry)
+    if len(matches) == 1:
+        return matches[0]
+    roles = [
+        (r.value if (r := e.get("role")) and isinstance(r, FactRecord)
+         and r.value is not None else
+         (r.candidate_value if isinstance(r, FactRecord) else None))
+        for e in template.codecs
+    ]
+    raise ValueError(
+        f"curated_overrides: role anchor {role_kw!r} matched {len(matches)} "
+        f"codecs (need exactly 1); known codec roles are {roles!r}"
+    )
 
 
 def _resolve_codec_entry(
