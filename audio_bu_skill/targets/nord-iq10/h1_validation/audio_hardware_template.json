@@ -51,6 +51,51 @@
       "reviewer_required": false,
       "ncc_state": "NOT_ATTESTED",
       "not_attested_disclosures": []
+    },
+    "mclk": {
+      "value": null,
+      "authority": {
+        "origin": "none",
+        "strength": "UNAVAILABLE"
+      },
+      "citations": [],
+      "row_ref": null,
+      "independently_verified": false,
+      "candidate_derived": false,
+      "candidate_value": null,
+      "reviewer_required": false,
+      "ncc_state": "NOT_ATTESTED",
+      "not_attested_disclosures": []
+    },
+    "global_md_oe": {
+      "value": null,
+      "authority": {
+        "origin": "none",
+        "strength": "UNAVAILABLE"
+      },
+      "citations": [],
+      "row_ref": null,
+      "independently_verified": false,
+      "candidate_derived": false,
+      "candidate_value": null,
+      "reviewer_required": false,
+      "ncc_state": "NOT_ATTESTED",
+      "not_attested_disclosures": []
+    },
+    "scmi_index": {
+      "value": null,
+      "authority": {
+        "origin": "none",
+        "strength": "UNAVAILABLE"
+      },
+      "citations": [],
+      "row_ref": null,
+      "independently_verified": false,
+      "candidate_derived": false,
+      "candidate_value": null,
+      "reviewer_required": false,
+      "ncc_state": "NOT_ATTESTED",
+      "not_attested_disclosures": []
     }
   },
   "codecs": [
@@ -99,6 +144,51 @@
         "reviewer_required": true,
         "ncc_state": "NOT_ATTESTED",
         "not_attested_disclosures": []
+      },
+      "i2c_bus_label": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "i2c_address": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "reset_gpios": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
       }
     },
     {
@@ -144,6 +234,51 @@
         "candidate_derived": true,
         "candidate_value": "ADC / capture path, I2C-attached",
         "reviewer_required": true,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "i2c_bus_label": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "i2c_address": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "reset_gpios": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
         "ncc_state": "NOT_ATTESTED",
         "not_attested_disclosures": []
       }
