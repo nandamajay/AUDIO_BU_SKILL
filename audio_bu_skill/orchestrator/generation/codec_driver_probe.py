@@ -36,14 +36,35 @@ Hard constraints (Slice 1):
 The frozen dataclass is deterministic: same tree contents + same codec_keys →
 same probe.
 
-Identity → file mapping (bounded, no glob):
+Identity → file mapping (BOUNDED, EXPLICIT — never a glob):
 
   A codec identity does not always map to ``<identity>.c``. ``pcm1681`` lives in
   ``pcm1681.c``; ``adau1979`` has NO ``adau1979.c`` — its compatible lives in the
   shared ``adau1977-spi.c`` of_match_table (alongside adau1977/adau1978). The
   probe therefore tries a fixed per-key candidate list (direct filename first,
-  then bounded family variants). Selection within a multi-compatible table is by
-  suffix join: the literal whose vendor-stripped part equals the codec key.
+  then a hand-enumerated set of family variants).
+
+  This candidate resolution is a CLOSED, EXPLICIT LIST — NOT a fuzzy search.
+  Two invariants make it impossible to widen into a match against the wrong
+  driver, and BOTH must be preserved by any future edit:
+
+    1. Filename selection is enumerated, never globbed. The only files opened
+       are the literal names in ``_CODEC_FILE_CANDIDATES[codec_key]`` (or the
+       single direct ``<key>.c`` for an unlisted key). There is no ``rglob``,
+       no ``walk``, no ``fnmatch``, no prefix/substring filename match anywhere
+       in this module. Adding a codec means adding an explicit tuple entry —
+       NOT relaxing the lookup. Do NOT replace this dict with a directory scan.
+
+    2. Compatible selection within a multi-part table is by EXACT suffix join,
+       not substring. ``_compatible_matches_key`` requires the vendor-stripped
+       part to EQUAL the codec key: in ``adau1977-spi.c`` the key ``adau1979``
+       matches ``adi,adau1979`` and rejects its siblings ``adi,adau1977`` /
+       ``adi,adau1978``. Do NOT weaken this to ``in`` / ``startswith`` — a
+       substring test would let ``adau197`` capture the wrong sibling.
+
+  Together these bound the probe to at most a handful of named files and to the
+  single exactly-matching literal, so a family-shared driver can never surface a
+  neighbouring codec's compatible.
 """
 
 from __future__ import annotations
@@ -62,9 +83,14 @@ _CODEC_DIR = "sound/soc/codecs"
 _COMPATIBLE_RE = re.compile(r'\.compatible\s*=\s*"([^"]+)"')
 
 #: Bounded per-codec-key candidate filename list under ``sound/soc/codecs/``.
-#: Direct ``<key>.c`` first, then a fixed set of family variants. This is the
-#: ONLY place identity→file knowledge lives; a key absent from this map falls
-#: back to the single direct candidate ``<key>.c`` (no glob / walk ever).
+#: Direct ``<key>.c`` first, then a hand-enumerated set of family variants. This
+#: is the ONLY place identity→file knowledge lives; a key absent from this map
+#: falls back to the single direct candidate ``<key>.c``.
+#:
+#: INVARIANT — this is a CLOSED, EXPLICIT LIST, never a glob. Every value is a
+#: literal filename. Do NOT replace this dict with a directory scan / rglob /
+#: fnmatch: doing so would let the probe wander onto an unintended driver and
+#: attest the wrong codec's compatible. Adding a codec = adding a literal entry.
 #:
 #:   * ``adau1979`` — no ``adau1979.c`` exists; its compatible is in the shared
 #:     ADAU197x driver. The SPI variant carries the of_match_table on Nord.
@@ -85,11 +111,17 @@ def _candidates_for(codec_key: str) -> tuple[str, ...]:
 
 
 def _compatible_matches_key(compatible: str, codec_key: str) -> bool:
-    """True when a ``vendor,part`` compatible's part equals the codec key.
+    """True when a ``vendor,part`` compatible's part EXACTLY equals the codec key.
 
     ``"adi,adau1979"`` matches key ``"adau1979"``; ``"adi,adau1977"`` does not.
     A compatible with no comma is compared whole (defensive; upstream codec
     compatibles are always ``vendor,part``).
+
+    INVARIANT — this is EXACT equality, never a substring test. Within a
+    family-shared of_match_table (e.g. ``adau1977-spi.c`` listing adau1977 /
+    adau1978 / adau1979) exact equality is what stops the probe from selecting a
+    neighbouring codec's literal. Do NOT relax ``==`` to ``in`` / ``startswith``
+    / ``fnmatch``.
     """
     part = compatible.rsplit(",", 1)[-1].strip()
     return part == codec_key
