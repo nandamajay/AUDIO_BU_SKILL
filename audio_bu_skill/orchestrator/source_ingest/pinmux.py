@@ -71,6 +71,7 @@ class PinmuxFact:
     function: int
     role: str
     name: str
+    state_label: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain dict shaped for consumption by ``track_t1``.
@@ -174,6 +175,7 @@ def derive_pinmux_from_dt(dt: dict[str, Any]) -> list[PinmuxFact] | Any:
                     function=fn_int,
                     role=role,
                     name=f"gpio.i2s.{role}",
+                    state_label=group_name,
                 )
             )
     if not facts:

@@ -1,0 +1,156 @@
+{
+  "$schema_version": "0.1.0-design",
+  "target_name": "nord-iq10",
+  "run_id": "h1-validation-nord-iq10",
+  "generated_from": {
+    "note": "H-1 validation harness \u2014 real target, rows not persisted"
+  },
+  "board_metadata": {
+    "target_name": "nord-iq10",
+    "soc": {
+      "value": null,
+      "authority": {
+        "origin": "none",
+        "strength": "UNAVAILABLE"
+      },
+      "citations": [],
+      "row_ref": null,
+      "independently_verified": false,
+      "candidate_derived": false,
+      "candidate_value": null,
+      "reviewer_required": false,
+      "ncc_state": "NOT_ATTESTED",
+      "not_attested_disclosures": []
+    },
+    "board_variant": {
+      "value": null,
+      "authority": {
+        "origin": "none",
+        "strength": "UNAVAILABLE"
+      },
+      "citations": [],
+      "row_ref": null,
+      "independently_verified": false,
+      "candidate_derived": false,
+      "candidate_value": null,
+      "reviewer_required": false,
+      "ncc_state": "NOT_ATTESTED",
+      "not_attested_disclosures": []
+    },
+    "pinctrl_state": {
+      "value": null,
+      "authority": {
+        "origin": "none",
+        "strength": "UNAVAILABLE"
+      },
+      "citations": [],
+      "row_ref": null,
+      "independently_verified": false,
+      "candidate_derived": false,
+      "candidate_value": null,
+      "reviewer_required": false,
+      "ncc_state": "NOT_ATTESTED",
+      "not_attested_disclosures": []
+    }
+  },
+  "codecs": [
+    {
+      "part_number": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "vendor": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "role": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": true,
+        "candidate_value": "DAC / playback path, I2C-attached",
+        "reviewer_required": true,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      }
+    },
+    {
+      "part_number": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "vendor": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": false,
+        "candidate_value": null,
+        "reviewer_required": false,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      },
+      "role": {
+        "value": null,
+        "authority": {
+          "origin": "none",
+          "strength": "UNAVAILABLE"
+        },
+        "citations": [],
+        "row_ref": null,
+        "independently_verified": false,
+        "candidate_derived": true,
+        "candidate_value": "ADC / capture path, I2C-attached",
+        "reviewer_required": true,
+        "ncc_state": "NOT_ATTESTED",
+        "not_attested_disclosures": []
+      }
+    }
+  ],
+  "amplifiers": [],
+  "buses": [],
+  "clocks": [],
+  "audio_links": []
+}

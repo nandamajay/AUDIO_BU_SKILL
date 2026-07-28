@@ -338,6 +338,61 @@ def _add_to_manifest(
 # ── Entity-group builders ───────────────────────────────────────────────────
 
 
+def _derive_pinctrl_state(gc: dict[str, Any]) -> FactRecord:
+    """Derive ``pinctrl_state`` from ``gc["audio_topology"]["pinmux"]``.
+
+    Rule (A-narrow): if exactly ONE distinct ``state_label`` appears across
+    all I2S-typed pinmux facts, emit an ATTESTED FactRecord with that label
+    as value, authority ``{"strength": "IPCAT_DERIVED", "origin": "kernel_dt"}``.
+    Zero or more-than-one distinct labels → NOT_ATTESTED (no guessing).
+    """
+    topology = gc.get("audio_topology") if isinstance(gc, dict) else None
+    if not isinstance(topology, dict):
+        return _not_attested_pinctrl()
+    pinmux = topology.get("pinmux")
+    if not isinstance(pinmux, list):
+        return _not_attested_pinctrl()
+
+    labels: set[str] = set()
+    for entry in pinmux:
+        if not isinstance(entry, dict):
+            continue
+        label = entry.get("state_label")
+        if isinstance(label, str) and label:
+            labels.add(label)
+
+    if len(labels) != 1:
+        return _not_attested_pinctrl()
+
+    derived_label = next(iter(labels))
+    return FactRecord(
+        value=derived_label,
+        authority={"strength": "IPCAT_DERIVED", "origin": "kernel_dt"},
+        citations=["kernel DT pinctrl state derivation (A-narrow)"],
+        row_ref=None,
+        independently_verified=False,
+        candidate_derived=False,
+        candidate_value=None,
+        reviewer_required=False,
+        ncc_state="ATTESTED",
+    )
+
+
+def _not_attested_pinctrl() -> FactRecord:
+    """Return a NOT_ATTESTED FactRecord for pinctrl_state."""
+    return FactRecord(
+        value=None,
+        authority={"strength": "UNAVAILABLE", "origin": "none"},
+        citations=[],
+        row_ref=None,
+        independently_verified=False,
+        candidate_derived=False,
+        candidate_value=None,
+        reviewer_required=False,
+        ncc_state="NOT_ATTESTED",
+    )
+
+
 def _build_board_metadata(
     gc: dict[str, Any],
     rows_by_ts: dict[str, dict[str, Any]],
@@ -406,6 +461,13 @@ def _build_board_metadata(
     )
     result["board_variant"] = variant_fact
     _add_to_manifest(variant_fact, "board_metadata.board_variant", gaps, counts)
+
+    # pinctrl_state: derived from audio_topology.pinmux (WP-SRC-A2 output).
+    # Rule: if exactly ONE distinct state_label appears across all I2S-typed
+    # pinmux facts, project it as ATTESTED. Zero or more-than-one → NOT_ATTESTED.
+    pinctrl_fact = _derive_pinctrl_state(gc)
+    result["pinctrl_state"] = pinctrl_fact
+    _add_to_manifest(pinctrl_fact, "board_metadata.pinctrl_state", gaps, counts)
 
     return result
 

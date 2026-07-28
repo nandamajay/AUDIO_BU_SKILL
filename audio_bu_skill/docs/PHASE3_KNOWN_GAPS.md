@@ -910,6 +910,28 @@ byte-identity preserved. The wiring is **effective but dormant on Nord.**
 
 G-3A.13 **REMAINS OPEN**. Phase A is necessary but not sufficient.
 
+#### A-narrow update (2026-07-28): pinctrl_state is FIRST template override to fire on real target
+
+`_PINCTRL_LABEL = "i2s8_active"` is now template-overridable via
+`board_metadata.pinctrl_state`. The projector derives this from
+`gc["audio_topology"]["pinmux"]` — populated by WP-SRC-A2
+`read_dt_pinctrl` during onboarding with `--kernel-source`.
+
+Derivation rule: exactly ONE distinct `state_label` across all I2S-typed
+pinmux entries → ATTESTED (authority `IPCAT_DERIVED` / `kernel_dt`).
+Zero or multiple → NOT_ATTESTED (no guessing).
+
+On real Nord with live kernel source: all pinmux entries carry
+`state_label="i2s8_active"` (single label) → derivation yields ATTESTED →
+effective-value resolution (`machine_driver.py:491-493`) picks the
+template value → emitted bytes `<&i2s8_active>` are unchanged
+(byte-identity preserved) but provenance shifts from hardcoded constant
+to template-derived. **This is the first override that fires on a real
+target via onboarding data** (board_variant remains NOT_ATTESTED because
+no schematic/variant authority is wired yet).
+
+Tests: `tests/test_a_narrow_pinctrl_derivation.py` (14 tests).
+
 ### Generality audit — hardcoded Nord/SA8797P literals in the four generator code paths
 
 Scope: `machine_driver.py`, `codec_stub.py`, `dt_scaffolding.py`,
