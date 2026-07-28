@@ -1073,6 +1073,11 @@ def _apply_curated_overrides(
             candidate_value=None,
             reviewer_required=False,
             ncc_state="ATTESTED",
+            # Persist the curated attestation block (validated non-empty above)
+            # so a downstream generation consumer can surface the sheet ref in
+            # its disclosure comment. Disclosure-only: this never reaches
+            # cross_verification / TrustedFacts / any gate.
+            attestation=dict(entry["attestation"]),
         )
 
 

@@ -88,6 +88,16 @@ class FactRecord:
     * ``not_attested_disclosures`` — list of dicts, each ``{
       "reason": <coverage_gap_reason>, "detail": <str>, "citations":
       [...] }``. WP-69 style disclosures live here.
+    * ``attestation`` — the curated-override attestation block
+      (``{"attested_by", "timestamp", "evidence", "target"}``) when this
+      leaf was gap-filled by a schematic/reviewer curated override, else
+      ``None``. The ``evidence`` sheet reference is what a generation
+      consumer surfaces in its disclosure comment
+      (``schematic-attested (sheet <X>), NOT IPCAT-cross-verified``). It
+      is **disclosure-only** — it never reaches cross_verification /
+      TrustedFacts / any gate. Serialized only when non-None (a leaf with
+      no curated attestation omits the key entirely, preserving
+      byte-identity for un-curated targets like Nord).
 
     **Construction invariant** (test_h1_projector_never_promotes_candidate.py):
 
@@ -109,6 +119,7 @@ class FactRecord:
     reviewer_required: bool = False
     ncc_state: str = "NOT_ATTESTED"
     not_attested_disclosures: list[dict[str, Any]] = field(default_factory=list)
+    attestation: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         # authority.strength must be a real crossverify enum. If the
@@ -167,8 +178,13 @@ class FactRecord:
 
         List/dict fields are copied so the returned dict is decoupled
         from the FactRecord.
+
+        ``attestation`` is serialized ONLY when non-None: an un-curated
+        leaf (the common case — e.g. every Nord schematic leaf) omits the
+        key entirely, so adding this field does not perturb the bytes of
+        an already-persisted template that carried no curated overrides.
         """
-        return {
+        out = {
             "value": self.value,
             "authority": dict(sorted(self.authority.items())),
             "citations": list(self.citations),
@@ -180,6 +196,9 @@ class FactRecord:
             "ncc_state": self.ncc_state,
             "not_attested_disclosures": [dict(d) for d in self.not_attested_disclosures],
         }
+        if self.attestation is not None:
+            out["attestation"] = dict(self.attestation)
+        return out
 
 
 # ── AudioHardwareTemplate ───────────────────────────────────────────────────
