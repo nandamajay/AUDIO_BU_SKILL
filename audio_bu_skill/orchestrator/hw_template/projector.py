@@ -394,6 +394,25 @@ def _derive_pinctrl_state(gc: dict[str, Any]) -> FactRecord:
 
 def _not_attested_pinctrl() -> FactRecord:
     """Return a NOT_ATTESTED FactRecord for pinctrl_state."""
+    return _not_attested_leaf()
+
+
+def _not_attested_leaf() -> FactRecord:
+    """Return a bare NOT_ATTESTED FactRecord (value=null, no candidate).
+
+    This is the default state for a **schematic-attested** leaf
+    (WP_SCHEMATIC_ATTESTED_DESIGN.md §3.2): a slot the projector cannot fill
+    from any automated authority. It stays NOT_ATTESTED / value=null until a
+    curated override with ``origin="schematic"`` gap-fills it at onboarding
+    time. ``candidate_derived=False`` deliberately — a schematic slot is NOT a
+    candidate value we saw and refused to promote; it is a slot with *no*
+    automated source at all. (Contrast the codec ``part_number`` slot, which
+    carries the candidate DTS value with ``candidate_derived=True``.)
+
+    Because value is null on Nord, every consumer's ``_template_value`` returns
+    ``None`` and the hardcoded generator fallback fires unchanged — byte-identity
+    holds until a cited curated file lands (§3.5, §5).
+    """
     return FactRecord(
         value=None,
         authority={"strength": "UNAVAILABLE", "origin": "none"},
@@ -483,6 +502,17 @@ def _build_board_metadata(
     result["pinctrl_state"] = pinctrl_fact
     _add_to_manifest(pinctrl_fact, "board_metadata.pinctrl_state", gaps, counts)
 
+    # Schematic-attested slots (WP_SCHEMATIC_ATTESTED_DESIGN.md §3.2). No
+    # automated authority exists for these — they are populated ONLY by a
+    # curated override with origin="schematic" at onboarding time. Default
+    # NOT_ATTESTED / value=null so every generator falls through to its
+    # hardcoded constant on Nord (byte-identity). Inert until step 2+ wires the
+    # curated allowlist + live loading; no consumer reads them yet.
+    for schematic_field in ("mclk", "global_md_oe", "scmi_index"):
+        leaf = _not_attested_leaf()
+        result[schematic_field] = leaf
+        _add_to_manifest(leaf, f"board_metadata.{schematic_field}", gaps, counts)
+
     return result
 
 
@@ -548,6 +578,19 @@ def _build_codecs(
             "vendor": vendor_fact,
             "role": role_fact,
         }
+        # Schematic-attested per-codec slots (WP_SCHEMATIC_ATTESTED_DESIGN.md
+        # §3.2). i2c_bus_label / i2c_address have NO independent automated
+        # source (the &i2c18 crosswalk was refused — qgenie_analysis.json:219;
+        # 0x31/0x4c are candidate-derived, forbidden to promote). Default
+        # NOT_ATTESTED / value=null; a curated origin="schematic" override
+        # fills them later. codec_stub keeps its hardcoded &i2c18 / 0x31 / 0x4c
+        # fallbacks unchanged on Nord (byte-identity). Inert — no consumer yet.
+        for schematic_field in ("i2c_bus_label", "i2c_address", "reset_gpios"):
+            leaf = _not_attested_leaf()
+            entry[schematic_field] = leaf
+            _add_to_manifest(
+                leaf, f"codecs[{idx}].{schematic_field}", gaps, counts
+            )
         out.append(entry)
         _add_to_manifest(part_fact, f"codecs[{idx}].part_number", gaps, counts)
         _add_to_manifest(vendor_fact, f"codecs[{idx}].vendor", gaps, counts)
